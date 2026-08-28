@@ -18,6 +18,10 @@ import { EvidenceModule } from "./evidence/evidence.module";
 import { RecordingsModule } from "./recordings/recordings.module";
 import { ClaimsModule } from "./claims/claims.module";
 import { ReturnsModule } from "./returns/returns.module";
+import { MarketplaceModule } from "./marketplace/marketplace.module";
+import { AuditModule } from "./audit/audit.module";
+import { AnalyticsModule } from "./analytics/analytics.module";
+import { BillingModule } from "./billing/billing.module";
 import { HealthController } from "./health.controller";
 
 @Module({
@@ -36,6 +40,10 @@ import { HealthController } from "./health.controller";
     RecordingsModule,
     ClaimsModule,
     ReturnsModule,
+    MarketplaceModule,
+    AuditModule,
+    AnalyticsModule,
+    BillingModule,
   ],
   controllers: [HealthController],
   providers: [
