@@ -1,0 +1,39 @@
+import { Controller, Get, Post, Param, Body } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
+import { IsString, IsNotEmpty, IsOptional } from "class-validator";
+import { RecordingsService } from "./recordings.service";
+import { CurrentUser, AuthUser } from "../common/decorators/current-user.decorator";
+import { Roles } from "../common/decorators/roles.decorator";
+
+class StartRecordingDto {
+  @IsString() @IsNotEmpty() orderId!: string;
+  @IsOptional() @IsString() stationId?: string;
+}
+
+@ApiTags("recordings")
+@ApiBearerAuth()
+@Controller("recordings")
+export class RecordingsController {
+  constructor(private readonly recordingsService: RecordingsService) {}
+
+  @Post("start")
+  @Roles("company_admin", "warehouse_manager", "supervisor", "packing_operator", "super_admin")
+  async start(@CurrentUser() user: AuthUser, @Body() dto: StartRecordingDto) {
+    const data = await this.recordingsService.start(user, dto);
+    return { success: true, data, error: null };
+  }
+
+  @Post(":id/stop")
+  @Roles("company_admin", "warehouse_manager", "supervisor", "packing_operator", "super_admin")
+  async stop(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const data = await this.recordingsService.stop(user, id);
+    return { success: true, data, error: null };
+  }
+
+  @Get(":id")
+  @Roles("company_admin", "warehouse_manager", "supervisor", "packing_operator", "qc_operator", "claims_executive", "viewer", "super_admin")
+  async get(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const data = await this.recordingsService.get(user, id);
+    return { success: true, data, error: null };
+  }
+}

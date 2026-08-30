@@ -9,10 +9,19 @@ import { TenantGuard } from "./common/guards/tenant.guard";
 import { RolesGuard } from "./common/guards/roles.guard";
 import { AuthModule } from "./auth/auth.module";
 import { CompaniesModule } from "./companies/companies.module";
-import { BillingModule } from "./billing/billing.module";
-import { AnalyticsModule } from "./analytics/analytics.module";
-import { AuditModule } from "./audit/audit.module";
+import { UsersModule } from "./users/users.module";
+import { WarehousesModule } from "./warehouses/warehouses.module";
+import { OrdersModule } from "./orders/orders.module";
+import { ScannerModule } from "./scanner/scanner.module";
+import { RecordingsModule } from "./recordings/recordings.module";
+import { EvidenceModule } from "./evidence/evidence.module";
+import { UploadModule } from "./upload/upload.module";
+import { ClaimsModule } from "./claims/claims.module";
+import { ReturnsModule } from "./returns/returns.module";
 import { MarketplaceModule } from "./marketplace/marketplace.module";
+import { AuditModule } from "./audit/audit.module";
+import { AnalyticsModule } from "./analytics/analytics.module";
+import { BillingModule } from "./billing/billing.module";
 import { HealthController } from "./health.controller";
 
 @Module({
@@ -22,10 +31,19 @@ import { HealthController } from "./health.controller";
     PrismaModule,
     AuthModule,
     CompaniesModule,
-    BillingModule,
-    AnalyticsModule,
-    AuditModule,
+    UsersModule,
+    WarehousesModule,
+    OrdersModule,
+    ScannerModule,
+    RecordingsModule,
+    EvidenceModule,
+    UploadModule,
+    ClaimsModule,
+    ReturnsModule,
     MarketplaceModule,
+    AuditModule,
+    AnalyticsModule,
+    BillingModule,
   ],
   controllers: [HealthController],
   providers: [
