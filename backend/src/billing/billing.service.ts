@@ -13,6 +13,16 @@ const PLAN_QUOTAS: Record<string, { users: number; warehouses: number; storageBy
   enterprise: { users: 99999, warehouses: 99999, storageBytes: 2199023255552n, priceInr: 0 },
 };
 
+function publicQuotas(plan: string) {
+  const q = PLAN_QUOTAS[plan] || PLAN_QUOTAS.free;
+  return {
+    users: q.users,
+    warehouses: q.warehouses,
+    storageGb: Number(q.storageBytes / 1073741824n),
+    priceInr: q.priceInr,
+  };
+}
+
 @Injectable()
 export class BillingService {
   constructor(
@@ -28,12 +38,13 @@ export class BillingService {
       where: { id: user.companyId },
       select: { plan: true, storageUsed: true, storageQuota: true },
     });
+    const plan = company?.plan || "free";
     return {
       subscription: sub,
-      plan: company?.plan,
-      quotas: PLAN_QUOTAS[company?.plan || "free"],
-      storageUsed: company?.storageUsed?.toString(),
-      storageQuota: company?.storageQuota?.toString(),
+      plan,
+      quotas: publicQuotas(plan),
+      storageUsed: company?.storageUsed?.toString() ?? "0",
+      storageQuota: company?.storageQuota?.toString() ?? "0",
     };
   }
 
@@ -42,11 +53,9 @@ export class BillingService {
     dto: { plan: "starter" | "professional" | "enterprise"; razorpaySubId: string },
   ) {
     if (!PLAN_QUOTAS[dto.plan]) throw new BadRequestException("Invalid plan");
-
     const now = new Date();
     const periodEnd = new Date(now);
     periodEnd.setMonth(periodEnd.getMonth() + 1);
-
     const sub = await this.prisma.billingSubscription.upsert({
       where: { companyId: user.companyId },
       create: {
@@ -65,7 +74,6 @@ export class BillingService {
         currentPeriodEnd: periodEnd,
       },
     });
-
     await this.prisma.company.update({
       where: { id: user.companyId },
       data: {
@@ -73,19 +81,11 @@ export class BillingService {
         storageQuota: PLAN_QUOTAS[dto.plan].storageBytes,
       },
     });
-
-    await this.prisma.auditLog.create({
-      data: {
-        companyId: user.companyId,
-        actorId: user.id,
-        action: "billing.subscribe",
-        entityType: "BillingSubscription",
-        entityId: sub.id,
-        afterState: { plan: dto.plan, razorpaySubId: dto.razorpaySubId },
-      },
-    });
-
     return sub;
+  }
+
+  getPlans() {
+    return Object.keys(PLAN_QUOTAS).map((id) => ({ id, ...publicQuotas(id) }));
   }
 
   verifyRazorpaySignature(rawBody: Buffer, signature: string | undefined): boolean {
@@ -108,15 +108,5 @@ export class BillingService {
     }
     const payload = JSON.parse(rawBody.toString("utf8"));
     return { received: true, event: payload?.event };
-  }
-
-  getPlans() {
-    return Object.entries(PLAN_QUOTAS).map(([id, q]) => ({
-      id,
-      users: q.users,
-      warehouses: q.warehouses,
-      storageGb: Number(q.storageBytes / 1073741824n),
-      priceInr: q.priceInr,
-    }));
   }
 }
