@@ -153,4 +153,47 @@ export class OrdersService {
 
     return updated;
   }
+
+  async transition(user: AuthUser, id: string, status: string) {
+    const { NotFoundException, BadRequestException } = await import("@nestjs/common");
+    const order = await this.prisma.order.findFirst({
+      where: { id, companyId: user.companyId },
+    });
+    if (!order) throw new NotFoundException("Order not found");
+
+    const allowed: Record<string, string[]> = {
+      synced: ["queued", "packing", "closed"],
+      queued: ["packing", "closed"],
+      packing: ["recording", "scanned", "closed"],
+      recording: ["scanned", "evidence_ready", "closed"],
+      scanned: ["evidence_ready", "dispatched", "closed"],
+      evidence_ready: ["dispatched", "closed"],
+      dispatched: ["shipped", "claimed", "returned", "closed"],
+      shipped: ["claimed", "returned", "closed"],
+      claimed: ["closed"],
+      returned: ["closed"],
+      closed: [],
+    };
+    if (!(allowed[order.status] || []).includes(status)) {
+      throw new BadRequestException(`Invalid status transition: ${order.status} → ${status}`);
+    }
+
+    const updated = await this.prisma.order.update({
+      where: { id },
+      data: { status: status as any },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        companyId: user.companyId,
+        actorId: user.id,
+        action: "order.transition",
+        entityType: "Order",
+        entityId: id,
+        beforeState: { status: order.status },
+        afterState: { status },
+      },
+    });
+    return updated;
+  }
 }

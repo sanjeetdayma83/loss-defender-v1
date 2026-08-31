@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Patch, Param, Body, Query } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, IsNumber, Min } from "class-validator";
+import { IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, IsNumber, Min, IsIn } from "class-validator";
 import { Type } from "class-transformer";
 import { OrdersService } from "./orders.service";
 import { CurrentUser, AuthUser } from "../common/decorators/current-user.decorator";
@@ -11,7 +11,6 @@ class OrderItemDto {
   @IsNumber() @Min(1) qty!: number;
   @IsOptional() @IsString() name?: string;
 }
-
 class CreateOrderDto {
   @IsOptional() @IsString() marketplace?: string;
   @IsOptional() @IsString() marketplaceOrderId?: string;
@@ -19,15 +18,20 @@ class CreateOrderDto {
   @IsArray() @ValidateNested({ each: true }) @Type(() => OrderItemDto)
   items!: OrderItemDto[];
 }
-
 class AssignDto {
   @IsString() @IsNotEmpty() operatorId!: string;
   @IsOptional() @IsString() stationId?: string;
 }
-
 class DispatchDto {
   @IsString() @IsNotEmpty() awb!: string;
   @IsString() @IsNotEmpty() courier!: string;
+}
+class TransitionDto {
+  @IsIn([
+    "queued", "packing", "recording", "scanned", "evidence_ready",
+    "dispatched", "shipped", "claimed", "returned", "closed",
+  ])
+  status!: string;
 }
 
 @ApiTags("orders")
@@ -71,6 +75,13 @@ export class OrdersController {
   @Roles("company_admin", "warehouse_manager", "supervisor", "super_admin")
   async assign(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: AssignDto) {
     const data = await this.ordersService.assign(user, id, dto);
+    return { success: true, data, error: null };
+  }
+
+  @Patch(":id/status")
+  @Roles("company_admin", "warehouse_manager", "supervisor", "packing_operator", "super_admin")
+  async transition(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: TransitionDto) {
+    const data = await this.ordersService.transition(user, id, dto.status);
     return { success: true, data, error: null };
   }
 
