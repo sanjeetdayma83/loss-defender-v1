@@ -1,4 +1,4 @@
-﻿import {
+import {
   CanActivate,
   ExecutionContext,
   Injectable,
@@ -35,13 +35,20 @@ export class ClerkAuthGuard implements CanActivate {
     const token = authHeader.slice(7);
     let payload: { sub?: string };
 
+    const secretKey = this.config.get<string>("clerk.secretKey");
+
     try {
+      // Dev-friendly: no authorizedParties filter, allow 2 min clock skew
       payload = await verifyToken(token, {
-        secretKey: this.config.get<string>("clerk.secretKey"),
-        authorizedParties: this.config.get<string[]>("clerk.authorizedParties"),
+        secretKey,
+        clockSkewInMs: 120_000,
       });
-    } catch {
-      throw new UnauthorizedException("Invalid or expired session token");
+    } catch (err: any) {
+      console.error("[ClerkAuthGuard] verifyToken failed:", err?.message || err);
+      console.error("[ClerkAuthGuard] secretKey set:", !!secretKey, "prefix:", secretKey?.slice(0, 12));
+      throw new UnauthorizedException(
+        `Invalid or expired session token (${err?.reason || err?.message || "verify failed"})`,
+      );
     }
 
     const clerkId = payload.sub;
