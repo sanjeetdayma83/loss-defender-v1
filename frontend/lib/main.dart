@@ -7,16 +7,17 @@ void main() {
   runApp(const ProviderScope(child: LossDefenderApp()));
 }
 
-class LossDefenderApp extends StatelessWidget {
+class LossDefenderApp extends ConsumerWidget {
   const LossDefenderApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final router = createRouter(isSignedIn: false);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final router = ref.watch(appRouterProvider);
     return MaterialApp.router(
       title: "LOSS DEFENDER V1",
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1A237E)),
         useMaterial3: true,
       ),
       routerConfig: router,

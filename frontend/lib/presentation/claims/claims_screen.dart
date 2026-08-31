@@ -2,16 +2,16 @@ import "package:flutter/material.dart";
 import "package:go_router/go_router.dart";
 import "../../core/network/api_client.dart";
 
-class OrdersScreen extends StatefulWidget {
-  const OrdersScreen({super.key});
+class ClaimsScreen extends StatefulWidget {
+  const ClaimsScreen({super.key});
   @override
-  State<OrdersScreen> createState() => _OrdersScreenState();
+  State<ClaimsScreen> createState() => _ClaimsScreenState();
 }
 
-class _OrdersScreenState extends State<OrdersScreen> {
-  List<dynamic> _orders = [];
-  String? _error;
+class _ClaimsScreenState extends State<ClaimsScreen> {
+  List<dynamic> _rows = [];
   bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
@@ -22,10 +22,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final res = await ApiClient.instance.dio.get("/orders");
-      final data = res.data["data"];
+      final res = await ApiClient.instance.dio.get("/claims");
       setState(() {
-        _orders = data is List ? data : [];
+        _rows = res.data["data"] is List ? res.data["data"] : [];
         _loading = false;
       });
     } catch (e) {
@@ -37,7 +36,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Orders"),
+        title: const Text("Claims"),
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.go("/dashboard")),
         actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh))],
       ),
@@ -46,14 +45,12 @@ class _OrdersScreenState extends State<OrdersScreen> {
           : _error != null
               ? Center(child: Text(_error!))
               : ListView.builder(
-                  itemCount: _orders.length,
+                  itemCount: _rows.length,
                   itemBuilder: (_, i) {
-                    final o = _orders[i] as Map<String, dynamic>;
-                    final id = o["id"]?.toString() ?? "";
+                    final c = _rows[i] as Map<String, dynamic>;
                     return ListTile(
-                      title: Text(o["marketplaceOrderId"]?.toString() ?? id),
-                      subtitle: Text("${o["status"]} · ${o["marketplace"]}"),
-                      onTap: () => context.go("/orders/$id"),
+                      title: Text(c["reason"]?.toString() ?? c["id"]?.toString() ?? ""),
+                      subtitle: Text("${c["status"]} · ${c["marketplace"]}"),
                     );
                   },
                 ),
