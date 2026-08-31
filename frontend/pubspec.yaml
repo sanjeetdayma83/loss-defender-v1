@@ -50,6 +50,7 @@ dependencies:
   go_router: ^18.0.0
   path_provider: ^2.1.6
   path: ^1.9.1
+  clerk_flutter: ^0.0.18-beta
 dev_dependencies:
   flutter_test:
     sdk: flutter

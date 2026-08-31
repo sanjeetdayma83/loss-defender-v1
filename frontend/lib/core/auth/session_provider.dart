@@ -9,6 +9,7 @@ class AppSession {
     this.role,
     this.email,
     this.warehouseId,
+    this.clerkUserId,
   });
 
   final String? token;
@@ -17,25 +18,10 @@ class AppSession {
   final String? role;
   final String? email;
   final String? warehouseId;
+  final String? clerkUserId;
 
-  bool get isSignedIn => token != null && token!.isNotEmpty && userId != null;
-
-  AppSession copyWith({
-    String? token,
-    String? userId,
-    String? companyId,
-    String? role,
-    String? email,
-    String? warehouseId,
-  }) =>
-      AppSession(
-        token: token ?? this.token,
-        userId: userId ?? this.userId,
-        companyId: companyId ?? this.companyId,
-        role: role ?? this.role,
-        email: email ?? this.email,
-        warehouseId: warehouseId ?? this.warehouseId,
-      );
+  bool get isSignedIn =>
+      token != null && token!.isNotEmpty && userId != null;
 }
 
 class SessionNotifier extends StateNotifier<AppSession> {
@@ -49,37 +35,25 @@ class SessionNotifier extends StateNotifier<AppSession> {
       state = const AppSession();
       return;
     }
-    await _api.setToken(token);
-    try {
-      final res = await _api.dio.get("/auth/sync");
-      final d = res.data["data"] as Map<String, dynamic>;
-      state = AppSession(
-        token: token,
-        userId: d["id"]?.toString(),
-        companyId: d["companyId"]?.toString(),
-        role: d["role"]?.toString(),
-        email: d["email"]?.toString(),
-        warehouseId: d["warehouseId"]?.toString(),
-      );
-    } catch (_) {
-      await _api.setToken(null);
-      state = const AppSession();
-    }
+    await applyToken(token);
   }
 
-  /// Dev / until Clerk UI is wired: paste session JWT
-  Future<String?> signInWithToken(String token) async {
-    await _api.setToken(token.trim());
+  /// Clerk session JWT → backend /auth/sync → AppSession
+  Future<String?> applyToken(String token, {String? clerkUserId}) async {
+    final t = token.trim();
+    if (t.isEmpty) return "Empty token";
+    await _api.setToken(t);
     try {
       final res = await _api.dio.get("/auth/sync");
       final d = res.data["data"] as Map<String, dynamic>;
       state = AppSession(
-        token: token.trim(),
+        token: t,
         userId: d["id"]?.toString(),
         companyId: d["companyId"]?.toString(),
         role: d["role"]?.toString(),
         email: d["email"]?.toString(),
         warehouseId: d["warehouseId"]?.toString(),
+        clerkUserId: clerkUserId ?? d["clerkId"]?.toString(),
       );
       return null;
     } catch (e) {
@@ -88,6 +62,8 @@ class SessionNotifier extends StateNotifier<AppSession> {
       return e.toString();
     }
   }
+
+  Future<String?> signInWithToken(String token) => applyToken(token);
 
   Future<void> signOut() async {
     try {
