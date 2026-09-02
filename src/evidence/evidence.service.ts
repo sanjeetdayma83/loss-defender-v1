@@ -1,75 +1,104 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { tenantWhere } from "../common/utils/tenant-where";
+import { StorageService } from "../storage/storage.service";
 import { AuthUser } from "../common/decorators/current-user.decorator";
-import { UploadService } from "../upload/upload.service";
-import { createHash } from "crypto";
 
 @Injectable()
 export class EvidenceService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly uploadService: UploadService,
+    private readonly storage: StorageService,
   ) {}
 
-  /**
-   * MVP: placeholder frames derived from segment metadata.
-   * Real FFmpeg extraction is a later worker job — structure is ready.
-   */
-  async createFromRecording(user: AuthUser, recordingId: string) {
-    const rec = await this.prisma.recording.findFirst({
-      where: tenantWhere(user.companyId, { id: recordingId }),
-      include: { segments: { orderBy: { sequence: "asc" } } },
-    });
-    if (!rec) throw new NotFoundException("Recording not found");
-
-    const existing = await this.prisma.evidence.findUnique({
-      where: { recordingId },
-    });
-    if (existing) return existing;
-
-    const frames = rec.segments.map((s, i) => ({
-      index: i,
-      sequence: s.sequence,
-      b2Key: s.b2Key,
-      checksum: s.checksum,
-      placeholder: true,
-      note: "Frame extract pending — FFmpeg worker",
-    }));
-
-    const checksum = createHash("sha256")
-      .update(frames.map((f) => f.checksum).join("|"))
-      .digest("hex");
-
-    return this.prisma.evidence.create({
-      data: {
-        companyId: user.companyId,
-        recordingId,
-        status: frames.length ? "ready" : "processing",
-        frameCount: frames.length,
-        frames,
-        checksum,
+  async get(user: AuthUser, id: string) {
+    const row = await this.prisma.evidence.findFirst({
+      where: { id, companyId: user.companyId },
+      include: {
+        order: {
+          select: {
+            id: true,
+            marketplaceOrderId: true,
+            status: true,
+            items: true,
+            awb: true,
+            courier: true,
+            recordingId: true,
+          },
+        },
       },
     });
-  }
+    if (!row) throw new NotFoundException("Evidence not found");
 
-  async getOne(user: AuthUser, id: string) {
-    const ev = await this.prisma.evidence.findFirst({
-      where: tenantWhere(user.companyId, { id }),
-    });
-    if (!ev) throw new NotFoundException("Evidence not found");
-    return ev;
-  }
+    const frames = Array.isArray(row.frames) ? (row.frames as any[]) : [];
+    const framesWithUrls = await Promise.all(
+      frames.map(async (f: any) => {
+        if (f?.b2Key) {
+          const url = await this.storage.getDownloadSignedUrl(f.b2Key);
+          return { ...f, downloadUrl: url };
+        }
+        return f;
+      }),
+    );
 
-  async getDownloadUrls(user: AuthUser, id: string) {
-    const ev = await this.getOne(user, id);
-    const frames = (ev.frames as { b2Key?: string; index: number }[]) ?? [];
-    const urls = [];
-    for (const f of frames) {
-      if (!f.b2Key) continue;
-      const signed = await this.uploadService.signedDownloadUrl(f.b2Key);
-      urls.push({ index: f.index, b2Key: f.b2Key, ...signed });
+    let segments: any[] = [];
+    if (row.recordingId) {
+      const segs = await this.prisma.recordingSegment.findMany({
+        where: { recordingId: row.recordingId },
+        orderBy: { sequence: "asc" },
+      });
+      segments = await Promise.all(
+        segs.map(async (s) => ({
+          id: s.id,
+          sequence: s.sequence,
+          b2Key: s.b2Key,
+          sizeBytes: s.sizeBytes.toString(),
+          checksum: s.checksum,
+          downloadUrl: await this.storage.getDownloadSignedUrl(s.b2Key),
+        })),
+      );
     }
-    return { evidenceId: id, checksum: ev.checksum, frames: urls };
+
+    return {
+      ...row,
+      frames: framesWithUrls,
+      segments,
+      b2Configured: this.storage.isConfigured(),
+    };
+  }
+
+  async getByOrder(user: AuthUser, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, companyId: user.companyId },
+    });
+    if (!order?.evidenceId) throw new NotFoundException("No evidence for this order");
+    return this.get(user, order.evidenceId);
+  }
+
+  async markReady(
+    user: AuthUser,
+    id: string,
+    dto: { frameCount: number; frames?: any; checksum?: string },
+  ) {
+    const existing = await this.prisma.evidence.findFirst({
+      where: { id, companyId: user.companyId },
+    });
+    if (!existing) throw new NotFoundException("Evidence not found");
+
+    const updated = await this.prisma.evidence.update({
+      where: { id },
+      data: {
+        status: "ready",
+        frameCount: dto.frameCount,
+        frames: (dto.frames as any) ?? existing.frames,
+        checksum: dto.checksum,
+      },
+    });
+
+    await this.prisma.order.updateMany({
+      where: { evidenceId: id, companyId: user.companyId },
+      data: { status: "evidence_ready" },
+    });
+
+    return updated;
   }
 }

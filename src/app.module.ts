@@ -4,18 +4,19 @@ import { APP_GUARD } from "@nestjs/core";
 import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
 import configuration from "./config/configuration";
 import { PrismaModule } from "./prisma/prisma.module";
+import { StorageModule } from "./storage/storage.module";
 import { ClerkAuthGuard } from "./common/guards/clerk-auth.guard";
 import { TenantGuard } from "./common/guards/tenant.guard";
 import { RolesGuard } from "./common/guards/roles.guard";
 import { AuthModule } from "./auth/auth.module";
 import { CompaniesModule } from "./companies/companies.module";
-import { WarehousesModule } from "./warehouses/warehouses.module";
 import { UsersModule } from "./users/users.module";
+import { WarehousesModule } from "./warehouses/warehouses.module";
 import { OrdersModule } from "./orders/orders.module";
 import { ScannerModule } from "./scanner/scanner.module";
-import { UploadModule } from "./upload/upload.module";
-import { EvidenceModule } from "./evidence/evidence.module";
 import { RecordingsModule } from "./recordings/recordings.module";
+import { EvidenceModule } from "./evidence/evidence.module";
+import { UploadModule } from "./upload/upload.module";
 import { ClaimsModule } from "./claims/claims.module";
 import { ReturnsModule } from "./returns/returns.module";
 import { MarketplaceModule } from "./marketplace/marketplace.module";
@@ -29,15 +30,16 @@ import { HealthController } from "./health.controller";
     ConfigModule.forRoot({ isGlobal: true, load: [configuration] }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     PrismaModule,
+    StorageModule,
     AuthModule,
     CompaniesModule,
-    WarehousesModule,
     UsersModule,
+    WarehousesModule,
     OrdersModule,
     ScannerModule,
-    UploadModule,
-    EvidenceModule,
     RecordingsModule,
+    EvidenceModule,
+    UploadModule,
     ClaimsModule,
     ReturnsModule,
     MarketplaceModule,

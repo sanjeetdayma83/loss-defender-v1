@@ -1,12 +1,6 @@
 import "package:clerk_flutter/clerk_flutter.dart";
 
-/// Global accessor for the current ClerkAuthState.
-/// Set once from AppRoot after ClerkAuthBuilder provides it (see app_root.dart).
-///
-/// NOTE: clerk_flutter is a beta/community-maintained SDK. If `isSignedIn`
-/// or `sessionToken()` don't match your installed version, check
-/// `ClerkAuthState` in your IDE's autocomplete and adjust ONLY this file —
-/// every other file in the app talks to auth exclusively through here.
+/// Global Clerk session access for Dio + router.
 class ClerkAuthHolder {
   static ClerkAuthState? instance;
 
@@ -16,7 +10,6 @@ class ClerkAuthHolder {
     try {
       return s.isSignedIn;
     } catch (_) {
-      // Fallback for SDK versions without isSignedIn — adjust if needed.
       return false;
     }
   }
@@ -26,7 +19,11 @@ class ClerkAuthHolder {
     if (s == null) return null;
     try {
       final token = await s.sessionToken();
-      return token.jwt;
+      final jwt = token.jwt;
+      // Must be header.payload.signature — never send garbage to API
+      if (jwt.isEmpty) return null;
+      if (jwt.split(".").length != 3) return null;
+      return jwt;
     } catch (_) {
       return null;
     }
@@ -35,8 +32,6 @@ class ClerkAuthHolder {
   static Future<void> signOut() async {
     try {
       await instance?.signOut();
-    } catch (_) {
-      // no-op — user still gets routed to /login by redirect logic
-    }
+    } catch (_) {}
   }
 }

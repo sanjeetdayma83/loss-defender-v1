@@ -23,6 +23,20 @@ export class RecordingsController {
     return { success: true, data, error: null };
   }
 
+  @Post(":id/pause")
+  @Roles("company_admin", "warehouse_manager", "supervisor", "packing_operator", "super_admin")
+  async pause(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const data = await this.recordingsService.pause(user, id);
+    return { success: true, data, error: null };
+  }
+
+  @Post(":id/resume")
+  @Roles("company_admin", "warehouse_manager", "supervisor", "packing_operator", "super_admin")
+  async resume(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const data = await this.recordingsService.resume(user, id);
+    return { success: true, data, error: null };
+  }
+
   @Post(":id/stop")
   @Roles("company_admin", "warehouse_manager", "supervisor", "packing_operator", "super_admin")
   async stop(@CurrentUser() user: AuthUser, @Param("id") id: string) {
@@ -31,7 +45,10 @@ export class RecordingsController {
   }
 
   @Get(":id")
-  @Roles("company_admin", "warehouse_manager", "supervisor", "packing_operator", "qc_operator", "claims_executive", "viewer", "super_admin")
+  @Roles(
+    "company_admin", "warehouse_manager", "supervisor", "packing_operator",
+    "qc_operator", "claims_executive", "viewer", "super_admin",
+  )
   async get(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     const data = await this.recordingsService.get(user, id);
     return { success: true, data, error: null };

@@ -1,5 +1,5 @@
-﻿import { NestFactory } from "@nestjs/core";
-import { ValidationPipe, VersioningType } from "@nestjs/common";
+import { NestFactory } from "@nestjs/core";
+import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import helmet from "helmet";
@@ -17,7 +17,7 @@ async function bootstrap() {
   app.use(compression());
   app.enableCors({ origin: true, credentials: true });
   app.setGlobalPrefix(`api/${apiVersion}`);
-  app.enableVersioning({ type: VersioningType.URI });
+  
 
   app.useGlobalPipes(
     new ValidationPipe({

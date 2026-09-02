@@ -1,16 +1,15 @@
 import {
   Injectable, NotFoundException, BadRequestException,
 } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../storage/storage.service";
 import { AuthUser } from "../common/decorators/current-user.decorator";
-import { createHash, randomUUID } from "crypto";
 
 @Injectable()
 export class UploadService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
+    private readonly storage: StorageService,
   ) {}
 
   async init(
@@ -25,18 +24,39 @@ export class UploadService {
       throw new BadRequestException("Recording already completed");
     }
 
-    const key = `${recording.b2KeyPrefix}/seg-${String(dto.sequence).padStart(4, "0")}.mp4`;
-    const uploadId = randomUUID();
+    const prefix = recording.b2KeyPrefix || `recordings/${user.companyId}/${recording.id}`;
+    const key = `${prefix}/seg-${String(dto.sequence).padStart(4, "0")}.mp4`;
+    const contentType = dto.contentType || "video/mp4";
 
-    // Placeholder — real B2 multipart init will use @aws-sdk/client-s3 when keys are live
+    // Simple single-PUT signed URL (works for segments < ~5GB with B2)
+    const signedUrl = await this.storage.getUploadSignedUrl(key, contentType);
+
+    // Also support multipart for large files
+    const multipart = await this.storage.createMultipart(key, contentType);
+
     return {
-      uploadId,
       key,
       sequence: dto.sequence,
-      // Client will PUT binary to a signed URL (generated when B2 keys configured)
-      signedUrl: null,
-      message: "Configure B2 keys to receive signed upload URLs",
+      signedUrl,
+      uploadId: multipart.uploadId,
+      b2Configured: this.storage.isConfigured(),
+      message: this.storage.isConfigured()
+        ? "PUT binary to signedUrl, then POST /upload/complete"
+        : "B2 not configured — register segment with any key for local/dev",
     };
+  }
+
+  async signPart(
+    user: AuthUser,
+    dto: { recordingId: string; key: string; uploadId: string; partNumber: number },
+  ) {
+    const recording = await this.prisma.recording.findFirst({
+      where: { id: dto.recordingId, companyId: user.companyId },
+    });
+    if (!recording) throw new NotFoundException("Recording not found");
+
+    const signedUrl = await this.storage.signPart(dto.key, dto.uploadId, dto.partNumber);
+    return { signedUrl, partNumber: dto.partNumber };
   }
 
   async complete(
@@ -47,12 +67,18 @@ export class UploadService {
       b2Key: string;
       sizeBytes: number;
       checksum: string;
+      uploadId?: string;
+      parts?: Array<{ ETag: string; PartNumber: number }>;
     },
   ) {
     const recording = await this.prisma.recording.findFirst({
       where: { id: dto.recordingId, companyId: user.companyId },
     });
     if (!recording) throw new NotFoundException("Recording not found");
+
+    if (dto.uploadId && dto.parts?.length) {
+      await this.storage.completeMultipart(dto.b2Key, dto.uploadId, dto.parts);
+    }
 
     const segment = await this.prisma.recordingSegment.upsert({
       where: {
@@ -77,22 +103,19 @@ export class UploadService {
       },
     });
 
+    const count = await this.prisma.recordingSegment.count({
+      where: { recordingId: dto.recordingId },
+    });
     await this.prisma.recording.update({
       where: { id: dto.recordingId },
-      data: { segmentCount: { increment: 1 } },
-    });
-
-    // Update company storage used
-    await this.prisma.company.update({
-      where: { id: user.companyId },
-      data: { storageUsed: { increment: BigInt(dto.sizeBytes) } },
+      data: { segmentCount: count },
     });
 
     return {
-      id: segment.id,
+      segmentId: segment.id,
       sequence: segment.sequence,
       b2Key: segment.b2Key,
-      uploadedAt: segment.uploadedAt,
+      segmentCount: count,
     };
   }
 }

@@ -4,6 +4,7 @@ import { APP_GUARD } from "@nestjs/core";
 import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
 import configuration from "./config/configuration";
 import { PrismaModule } from "./prisma/prisma.module";
+import { StorageModule } from "./storage/storage.module";
 import { ClerkAuthGuard } from "./common/guards/clerk-auth.guard";
 import { TenantGuard } from "./common/guards/tenant.guard";
 import { RolesGuard } from "./common/guards/roles.guard";
@@ -29,6 +30,7 @@ import { HealthController } from "./health.controller";
     ConfigModule.forRoot({ isGlobal: true, load: [configuration] }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     PrismaModule,
+    StorageModule,
     AuthModule,
     CompaniesModule,
     UsersModule,

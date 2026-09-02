@@ -1,0 +1,22 @@
+# Local / staging parity — API + Redis (DB = Neon, not local Postgres)
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+    depends_on:
+      - redis
+    restart: unless-stopped

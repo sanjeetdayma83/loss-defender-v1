@@ -35,7 +35,9 @@ export class ClerkAuthGuard implements CanActivate {
     const token = authHeader.slice(7);
     let payload: { sub?: string };
 
-    const secretKey = this.config.get<string>("clerk.secretKey");
+    const secretKey =
+      this.config.get<string>("clerk.secretKey") ||
+      this.config.get<string>("CLERK_SECRET_KEY");
 
     try {
       // Dev-friendly: no authorizedParties filter, allow 2 min clock skew

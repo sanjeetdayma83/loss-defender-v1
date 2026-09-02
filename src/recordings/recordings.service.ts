@@ -1,53 +1,48 @@
 import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-  ForbiddenException,
+  Injectable, NotFoundException, BadRequestException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { tenantWhere } from "../common/utils/tenant-where";
 import { AuthUser } from "../common/decorators/current-user.decorator";
-import { EvidenceService } from "../evidence/evidence.service";
 
 @Injectable()
 export class RecordingsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly evidenceService: EvidenceService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async start(user: AuthUser, orderId: string, stationId?: string) {
+  async start(user: AuthUser, dto: { orderId: string; stationId?: string }) {
     const order = await this.prisma.order.findFirst({
-      where: tenantWhere(user.companyId, { id: orderId }),
+      where: tenantWhere(user.companyId, { id: dto.orderId }),
     });
     if (!order) throw new NotFoundException("Order not found");
 
+    const allowed = ["queued", "packing", "recording", "scanned"];
+    if (!allowed.includes(order.status)) {
+      throw new BadRequestException(`Cannot start recording for order in status ${order.status}`);
+    }
+
     if (order.recordingId) {
-      throw new BadRequestException("Order already has a recording");
+      const existing = await this.prisma.recording.findUnique({ where: { id: order.recordingId } });
+      if (existing && existing.status !== "completed" && existing.status !== "failed") {
+        return existing;
+      }
     }
-
-    const scannable = ["packing", "recording", "scanned", "queued"];
-    if (!scannable.includes(order.status)) {
-      throw new BadRequestException(`Cannot start recording in status '${order.status}'`);
-    }
-
-    const prefix = `${user.companyId}/recordings/${orderId}`;
 
     const recording = await this.prisma.recording.create({
       data: {
         companyId: user.companyId,
         operatorId: user.id,
-        stationId: stationId ?? order.stationId,
+        stationId: dto.stationId || order.stationId,
         status: "started",
-        b2KeyPrefix: prefix,
+        b2KeyPrefix: `recordings/${user.companyId}/${order.id}`,
       },
     });
 
     await this.prisma.order.update({
-      where: { id: orderId },
+      where: { id: order.id },
       data: {
         recordingId: recording.id,
-        status: order.status === "queued" || order.status === "packing" ? "recording" : order.status,
+        status: "recording",
+        assignedOperatorId: order.assignedOperatorId || user.id,
       },
     });
 
@@ -58,7 +53,7 @@ export class RecordingsService {
         action: "recording.start",
         entityType: "Recording",
         entityId: recording.id,
-        afterState: { orderId, stationId },
+        afterState: { orderId: order.id },
       },
     });
 
@@ -66,9 +61,12 @@ export class RecordingsService {
   }
 
   async pause(user: AuthUser, id: string) {
-    const rec = await this.findOwned(user, id);
-    if (rec.status !== "started") {
-      throw new BadRequestException(`Cannot pause from status '${rec.status}'`);
+    const recording = await this.prisma.recording.findFirst({
+      where: { id, companyId: user.companyId },
+    });
+    if (!recording) throw new NotFoundException("Recording not found");
+    if (recording.status !== "started") {
+      throw new BadRequestException(`Cannot pause recording in status ${recording.status}`);
     }
     return this.prisma.recording.update({
       where: { id },
@@ -77,9 +75,12 @@ export class RecordingsService {
   }
 
   async resume(user: AuthUser, id: string) {
-    const rec = await this.findOwned(user, id);
-    if (rec.status !== "paused") {
-      throw new BadRequestException(`Cannot resume from status '${rec.status}'`);
+    const recording = await this.prisma.recording.findFirst({
+      where: { id, companyId: user.companyId },
+    });
+    if (!recording) throw new NotFoundException("Recording not found");
+    if (recording.status !== "paused") {
+      throw new BadRequestException(`Cannot resume recording in status ${recording.status}`);
     }
     return this.prisma.recording.update({
       where: { id },
@@ -87,67 +88,47 @@ export class RecordingsService {
     });
   }
 
-  async registerSegment(
-    user: AuthUser,
-    id: string,
-    dto: { sequence: number; b2Key: string; checksum: string; sizeBytes: number },
-  ) {
-    const rec = await this.findOwned(user, id);
-    if (!["started", "paused"].includes(rec.status)) {
-      throw new BadRequestException("Recording is not accepting segments");
-    }
-
-    const segment = await this.prisma.recordingSegment.create({
-      data: {
-        recordingId: id,
-        sequence: dto.sequence,
-        b2Key: dto.b2Key,
-        checksum: dto.checksum,
-        sizeBytes: BigInt(dto.sizeBytes),
-        uploadedAt: new Date(),
-      },
-    });
-
-    await this.prisma.recording.update({
-      where: { id },
-      data: { segmentCount: { increment: 1 } },
-    });
-
-    return {
-      id: segment.id,
-      sequence: segment.sequence,
-      b2Key: segment.b2Key,
-      checksum: segment.checksum,
-      sizeBytes: dto.sizeBytes,
-    };
-  }
-
   async stop(user: AuthUser, id: string) {
-    const rec = await this.findOwned(user, id);
-    if (!["started", "paused"].includes(rec.status)) {
-      throw new BadRequestException(`Cannot stop from status '${rec.status}'`);
+    const recording = await this.prisma.recording.findFirst({
+      where: { id, companyId: user.companyId },
+      include: { segments: true, order: true },
+    });
+    if (!recording) throw new NotFoundException("Recording not found");
+    if (recording.status === "completed") {
+      return { recording, evidence: null, alreadyStopped: true };
     }
 
     const updated = await this.prisma.recording.update({
       where: { id },
-      data: { status: "completed", stoppedAt: new Date() },
+      data: {
+        status: "completed",
+        stoppedAt: new Date(),
+        segmentCount: recording.segments.length,
+      },
     });
 
-    // Trigger evidence generation (placeholder frames for MVP; real FFmpeg later)
-    const evidence = await this.evidenceService.createFromRecording(user, id);
-
-    // Link evidence to order if present
-    const order = await this.prisma.order.findFirst({
-      where: tenantWhere(user.companyId, { recordingId: id }),
+    let evidence = await this.prisma.evidence.findFirst({
+      where: { recordingId: id },
     });
+    if (!evidence) {
+      evidence = await this.prisma.evidence.create({
+        data: {
+          companyId: user.companyId,
+          recordingId: id,
+          status: "processing",
+          frameCount: 0,
+          frames: [],
+        },
+      });
+    }
+
+    const order = recording.order;
     if (order) {
       await this.prisma.order.update({
         where: { id: order.id },
         data: {
           evidenceId: evidence.id,
-          status: order.status === "recording" || order.status === "scanned"
-            ? "evidence_ready"
-            : order.status,
+          status: "evidence_ready",
         },
       });
     }
@@ -159,40 +140,29 @@ export class RecordingsService {
         action: "recording.stop",
         entityType: "Recording",
         entityId: id,
-        afterState: { evidenceId: evidence.id, segmentCount: updated.segmentCount },
+        afterState: {
+          segmentCount: updated.segmentCount,
+          evidenceId: evidence.id,
+        },
       },
     });
 
-    return { recording: updated, evidence };
+    return { recording: updated, evidence, alreadyStopped: false };
   }
 
-  async getOne(user: AuthUser, id: string) {
-    const rec = await this.prisma.recording.findFirst({
-      where: tenantWhere(user.companyId, { id }),
+  async get(user: AuthUser, id: string) {
+    const row = await this.prisma.recording.findFirst({
+      where: { id, companyId: user.companyId },
       include: {
         segments: { orderBy: { sequence: "asc" } },
+        order: {
+          select: {
+            id: true, marketplaceOrderId: true, status: true, items: true,
+          },
+        },
       },
     });
-    if (!rec) throw new NotFoundException("Recording not found");
-    return {
-      ...rec,
-      segments: rec.segments.map((s) => ({
-        ...s,
-        sizeBytes: s.sizeBytes.toString(),
-      })),
-    };
-  }
-
-  private async findOwned(user: AuthUser, id: string) {
-    const rec = await this.prisma.recording.findFirst({
-      where: tenantWhere(user.companyId, { id }),
-    });
-    if (!rec) throw new NotFoundException("Recording not found");
-
-    const managers = ["company_admin", "warehouse_manager", "supervisor", "super_admin"];
-    if (!managers.includes(user.role) && rec.operatorId !== user.id) {
-      throw new ForbiddenException("Not your recording");
-    }
-    return rec;
+    if (!row) throw new NotFoundException("Recording not found");
+    return row;
   }
 }

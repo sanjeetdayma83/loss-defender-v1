@@ -1,3 +1,4 @@
+import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter_riverpod/flutter_riverpod.dart";
 import "package:go_router/go_router.dart";
@@ -26,10 +27,22 @@ import "../../presentation/settings/settings_screen.dart";
 import "../../presentation/supervisor/supervisor_screen.dart";
 import "../../presentation/offline/offline_queue_screen.dart";
 
-GoRouter buildRouter(WidgetRef ref, Listenable refreshListenable) {
+/// Merges Clerk auth changes + /auth/sync completion into one Listenable for GoRouter.
+class _MultiListenable extends ChangeNotifier {
+  _MultiListenable(List<Listenable> listenables) {
+    for (final l in listenables) {
+      l.addListener(notifyListeners);
+    }
+  }
+}
+
+GoRouter buildRouter(WidgetRef ref, Listenable clerkListenable) {
+  final authRefresh = ref.read(authRefreshProvider);
+  final refresh = _MultiListenable([clerkListenable, authRefresh]);
+
   return GoRouter(
     initialLocation: "/splash",
-    refreshListenable: refreshListenable,
+    refreshListenable: refresh,
     redirect: (context, state) {
       final loc = state.matchedLocation;
       final signedIn = ClerkAuthHolder.isSignedIn;
@@ -39,7 +52,9 @@ GoRouter buildRouter(WidgetRef ref, Listenable refreshListenable) {
         return authRoute ? null : "/login";
       }
 
+      // Warm the future; completion pings authRefresh -> redirect runs again
       final profileAsync = ref.read(authSyncProvider);
+
       if (profileAsync.isLoading) {
         return loc == "/splash" ? null : "/splash";
       }

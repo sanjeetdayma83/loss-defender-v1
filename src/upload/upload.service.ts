@@ -1,119 +1,118 @@
-import { Injectable, BadRequestException } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import {
-  S3Client,
-  CreateMultipartUploadCommand,
-  UploadPartCommand,
-  CompleteMultipartUploadCommand,
-  AbortMultipartUploadCommand,
-  PutObjectCommand,
-  GetObjectCommand,
-} from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+  Injectable, NotFoundException, BadRequestException,
+} from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../storage/storage.service";
 import { AuthUser } from "../common/decorators/current-user.decorator";
-import { randomUUID } from "crypto";
 
 @Injectable()
 export class UploadService {
-  private client: S3Client;
-  private bucket: string;
-  private ttl: number;
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
-  constructor(private readonly config: ConfigService) {
-    const endpoint = this.config.get<string>("b2.endpoint");
-    this.bucket = this.config.get<string>("b2.bucket") || "";
-    this.ttl = this.config.get<number>("b2.signedUrlTtl") || 900;
-
-    this.client = new S3Client({
-      endpoint,
-      region: "us-west-002",
-      credentials: {
-        accessKeyId: this.config.get<string>("b2.keyId") || "",
-        secretAccessKey: this.config.get<string>("b2.applicationKey") || "",
-      },
-      forcePathStyle: true,
-    });
-  }
-
-  /** Init multipart upload — returns uploadId + key under company prefix. */
-  async initMultipart(user: AuthUser, opts: { filename: string; contentType: string; prefix?: string }) {
-    if (!this.bucket) throw new BadRequestException("B2 bucket not configured");
-
-    const safeName = opts.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const key = `${user.companyId}/${opts.prefix || "media"}/${randomUUID()}-${safeName}`;
-
-    const cmd = new CreateMultipartUploadCommand({
-      Bucket: this.bucket,
-      Key: key,
-      ContentType: opts.contentType,
-    });
-    const res = await this.client.send(cmd);
-    if (!res.UploadId) throw new BadRequestException("Failed to init multipart upload");
-
-    return { uploadId: res.UploadId, key, bucket: this.bucket };
-  }
-
-  /** Presigned URL for a single part (client PUTs bytes directly to B2). */
-  async presignPart(key: string, uploadId: string, partNumber: number) {
-    if (partNumber < 1 || partNumber > 10000) {
-      throw new BadRequestException("partNumber must be 1–10000");
-    }
-    const cmd = new UploadPartCommand({
-      Bucket: this.bucket,
-      Key: key,
-      UploadId: uploadId,
-      PartNumber: partNumber,
-    });
-    const url = await getSignedUrl(this.client, cmd, { expiresIn: this.ttl });
-    return { url, partNumber, expiresIn: this.ttl };
-  }
-
-  async completeMultipart(
-    key: string,
-    uploadId: string,
-    parts: { partNumber: number; etag: string }[],
+  async init(
+    user: AuthUser,
+    dto: { recordingId: string; sequence: number; contentType?: string; sizeBytes?: number },
   ) {
-    const cmd = new CompleteMultipartUploadCommand({
-      Bucket: this.bucket,
-      Key: key,
-      UploadId: uploadId,
-      MultipartUpload: {
-        Parts: parts
-          .sort((a, b) => a.partNumber - b.partNumber)
-          .map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })),
+    const recording = await this.prisma.recording.findFirst({
+      where: { id: dto.recordingId, companyId: user.companyId },
+    });
+    if (!recording) throw new NotFoundException("Recording not found");
+    if (recording.status === "completed") {
+      throw new BadRequestException("Recording already completed");
+    }
+
+    const prefix = recording.b2KeyPrefix || `recordings/${user.companyId}/${recording.id}`;
+    const key = `${prefix}/seg-${String(dto.sequence).padStart(4, "0")}.mp4`;
+    const contentType = dto.contentType || "video/mp4";
+
+    const signedUrl = await this.storage.getUploadSignedUrl(key, contentType);
+    const multipart = await this.storage.createMultipart(key, contentType);
+
+    return {
+      key,
+      sequence: dto.sequence,
+      signedUrl,
+      uploadId: multipart.uploadId,
+      b2Configured: this.storage.isConfigured(),
+      message: this.storage.isConfigured()
+        ? "PUT binary to signedUrl, then POST /upload/complete"
+        : "B2 not configured — register segment with any key for local/dev",
+    };
+  }
+
+  async signPart(
+    user: AuthUser,
+    dto: { recordingId: string; key: string; uploadId: string; partNumber: number },
+  ) {
+    const recording = await this.prisma.recording.findFirst({
+      where: { id: dto.recordingId, companyId: user.companyId },
+    });
+    if (!recording) throw new NotFoundException("Recording not found");
+
+    const signedUrl = await this.storage.signPart(dto.key, dto.uploadId, dto.partNumber);
+    return { signedUrl, partNumber: dto.partNumber };
+  }
+
+  async complete(
+    user: AuthUser,
+    dto: {
+      recordingId: string;
+      sequence: number;
+      b2Key: string;
+      sizeBytes: number;
+      checksum: string;
+      uploadId?: string;
+      parts?: Array<{ ETag: string; PartNumber: number }>;
+    },
+  ) {
+    const recording = await this.prisma.recording.findFirst({
+      where: { id: dto.recordingId, companyId: user.companyId },
+    });
+    if (!recording) throw new NotFoundException("Recording not found");
+
+    if (dto.uploadId && dto.parts?.length) {
+      await this.storage.completeMultipart(dto.b2Key, dto.uploadId, dto.parts);
+    }
+
+    const segment = await this.prisma.recordingSegment.upsert({
+      where: {
+        recordingId_sequence: {
+          recordingId: dto.recordingId,
+          sequence: dto.sequence,
+        },
+      },
+      create: {
+        recordingId: dto.recordingId,
+        sequence: dto.sequence,
+        b2Key: dto.b2Key,
+        checksum: dto.checksum,
+        sizeBytes: BigInt(dto.sizeBytes),
+        uploadedAt: new Date(),
+      },
+      update: {
+        b2Key: dto.b2Key,
+        checksum: dto.checksum,
+        sizeBytes: BigInt(dto.sizeBytes),
+        uploadedAt: new Date(),
       },
     });
-    const res = await this.client.send(cmd);
-    return { key, location: res.Location, etag: res.ETag };
-  }
 
-  async abortMultipart(key: string, uploadId: string) {
-    await this.client.send(
-      new AbortMultipartUploadCommand({
-        Bucket: this.bucket,
-        Key: key,
-        UploadId: uploadId,
-      }),
-    );
-    return { aborted: true };
-  }
-
-  /** Short-lived signed GET for private media (5–15 min TTL). */
-  async signedDownloadUrl(key: string) {
-    const cmd = new GetObjectCommand({ Bucket: this.bucket, Key: key });
-    const url = await getSignedUrl(this.client, cmd, { expiresIn: this.ttl });
-    return { url, expiresIn: this.ttl };
-  }
-
-  async signedPutUrl(user: AuthUser, filename: string, contentType: string, prefix?: string) {
-    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const key = `${user.companyId}/${prefix || "media"}/${randomUUID()}-${safeName}`;
-    const cmd = new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-      ContentType: contentType,
+    const count = await this.prisma.recordingSegment.count({
+      where: { recordingId: dto.recordingId },
     });
-    const url = await getSignedUrl(this.client, cmd, { expiresIn: this.ttl });
-    return { url, key, expiresIn: this.ttl };
+    await this.prisma.recording.update({
+      where: { id: dto.recordingId },
+      data: { segmentCount: count },
+    });
+
+    return {
+      segmentId: segment.id,
+      sequence: segment.sequence,
+      b2Key: segment.b2Key,
+      segmentCount: count,
+    };
   }
 }
