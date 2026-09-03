@@ -48,7 +48,7 @@ class _AuthRootState extends State<AuthRoot> {
     if (pk.isEmpty) {
       setState(() {
         _booting = false;
-        _bootError = "CLERK_PUBLISHABLE_KEY missing";
+        _bootError = "CLERK_PUBLISHABLE_KEY missing — use --dart-define";
       });
       return;
     }
@@ -70,7 +70,7 @@ class _AuthRootState extends State<AuthRoot> {
     } catch (e) {
       setState(() {
         _booting = false;
-        _bootError = "Clerk init failed: $e";
+        _bootError = "Clerk init: $e";
       });
     }
   }
@@ -88,21 +88,11 @@ class _AuthRootState extends State<AuthRoot> {
     }
     if (_bootError != null || _auth == null) {
       return Scaffold(
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(_bootError ?? "No auth", textAlign: TextAlign.center),
-          ),
-        ),
+        body: Center(child: Text(_bootError ?? "No auth", textAlign: TextAlign.center)),
       );
     }
-    if (_auth!.isSignedIn) {
-      return HomePage(auth: _auth!);
-    }
-    return SignInPage(
-      auth: _auth!,
-      onSignedIn: () => setState(() {}),
-    );
+    if (_auth!.isSignedIn) return HomePage(auth: _auth!);
+    return SignInPage(auth: _auth!, onSignedIn: () => setState(() {}));
   }
 }
 
@@ -121,7 +111,7 @@ class _SignInPageState extends State<SignInPage> {
   final _code = TextEditingController();
   bool _busy = false;
   bool _needCode = false;
-  String _status = "Email + password se sign in";
+  String _status = "Email + password";
 
   Future<void> _submitPassword() async {
     setState(() {
@@ -139,29 +129,23 @@ class _SignInPageState extends State<SignInPage> {
         return;
       }
       final status = widget.auth.signIn?.status;
-      debugPrint("After password: status=$status");
-      if (status?.name == "needs_second_factor" ||
-          status.toString().contains("needs_second_factor") ||
-          status.toString().contains("needsSecondFactor")) {
-        // Prepare second factor (email/phone code)
+      if (status.toString().contains("second_factor") ||
+          status.toString().contains("SecondFactor")) {
         try {
           await widget.auth.attemptSignIn(strategy: Strategy.emailCode);
         } catch (_) {
           try {
             await widget.auth.attemptSignIn(strategy: Strategy.phoneCode);
-          } catch (e2) {
-            debugPrint("prepare 2FA: $e2");
-          }
+          } catch (_) {}
         }
         setState(() {
           _needCode = true;
-          _status = "2FA required — check email/SMS for code";
+          _status = "2FA — enter code from email/SMS";
         });
       } else {
         setState(() => _status = "Status: $status");
       }
     } catch (e) {
-      debugPrint("SIGNIN ERROR: $e");
       setState(() => _status = "ERROR: $e");
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -171,10 +155,9 @@ class _SignInPageState extends State<SignInPage> {
   Future<void> _submitCode() async {
     setState(() {
       _busy = true;
-      _status = "Verifying code…";
+      _status = "Verifying…";
     });
     try {
-      // Try email code first, then phone
       try {
         await widget.auth.attemptSignIn(
           strategy: Strategy.emailCode,
@@ -189,11 +172,9 @@ class _SignInPageState extends State<SignInPage> {
       if (widget.auth.isSignedIn) {
         widget.onSignedIn();
       } else {
-        setState(() =>
-            _status = "Code submitted. Status: ${widget.auth.signIn?.status}");
+        setState(() => _status = "Status: ${widget.auth.signIn?.status}");
       }
     } catch (e) {
-      debugPrint("CODE ERROR: $e");
       setState(() => _status = "ERROR: $e");
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -223,19 +204,12 @@ class _SignInPageState extends State<SignInPage> {
                 const Text("LOSS DEFENDER",
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                Text(
-                  _needCode ? "Enter verification code" : "Sign in",
-                  textAlign: TextAlign.center,
-                ),
                 const SizedBox(height: 24),
                 if (!_needCode) ...[
                   TextField(
                     controller: _email,
                     decoration: const InputDecoration(
-                      labelText: "Email",
-                      border: OutlineInputBorder(),
-                    ),
+                        labelText: "Email", border: OutlineInputBorder()),
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -243,11 +217,9 @@ class _SignInPageState extends State<SignInPage> {
                     obscureText: true,
                     onSubmitted: (_) => _busy ? null : _submitPassword(),
                     decoration: const InputDecoration(
-                      labelText: "Password",
-                      border: OutlineInputBorder(),
-                    ),
+                        labelText: "Password", border: OutlineInputBorder()),
                   ),
-                ] else ...[
+                ] else
                   TextField(
                     controller: _code,
                     keyboardType: TextInputType.number,
@@ -255,39 +227,19 @@ class _SignInPageState extends State<SignInPage> {
                     decoration: const InputDecoration(
                       labelText: "Verification code",
                       border: OutlineInputBorder(),
-                      hintText: "6-digit code from email/SMS",
                     ),
                   ),
-                ],
                 const SizedBox(height: 12),
-                Text(
-                  _status,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: _status.startsWith("ERROR") ? Colors.red : Colors.black87,
-                  ),
-                ),
+                Text(_status, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: _busy
                       ? null
                       : (_needCode ? _submitCode : _submitPassword),
                   child: Text(_busy
-                      ? "Please wait…"
+                      ? "…"
                       : (_needCode ? "Verify code" : "Sign in")),
                 ),
-                if (_needCode) ...[
-                  const SizedBox(height: 8),
-                  TextButton(
-                    onPressed: _busy
-                        ? null
-                        : () => setState(() {
-                              _needCode = false;
-                              _status = "Email + password se sign in";
-                            }),
-                    child: const Text("Back"),
-                  ),
-                ],
               ],
             ),
           ),
@@ -308,11 +260,12 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _dio = Dio(BaseOptions(
     baseUrl: Env.apiBaseUrl,
-    connectTimeout: const Duration(seconds: 15),
+    connectTimeout: const Duration(seconds: 20),
   ));
-  String _log = "Loading…";
+  String _log = "Ready";
   bool _busy = false;
   Map<String, dynamic>? _user;
+  String? _lastOrderId;
 
   @override
   void initState() {
@@ -322,9 +275,8 @@ class _HomePageState extends State<HomePage> {
 
   Future<String?> _jwt() async {
     try {
-      final t = await widget.auth.sessionToken();
-      return t.jwt;
-    } catch (e) {
+      return (await widget.auth.sessionToken()).jwt;
+    } catch (_) {
       return widget.auth.session?.lastActiveToken?.jwt;
     }
   }
@@ -334,7 +286,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final jwt = await _jwt();
       if (jwt == null || jwt.isEmpty) {
-        setState(() => _log = "No JWT");
+        setState(() => _log = "No JWT — sign in again");
         return;
       }
       _dio.options.headers["Authorization"] = "Bearer $jwt";
@@ -384,6 +336,57 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  Future<void> _createOrder() async {
+    await _withAuth(() async {
+      final wid = _user?["warehouseId"];
+      final r = await _dio.post("/orders", data: {
+        "warehouseId": wid,
+        "externalOrderId": "TEST-${DateTime.now().millisecondsSinceEpoch}",
+        "marketplace": "manual",
+        "items": [
+          {"sku": "SKU-001", "name": "Test Item", "qty": 2, "scannedQty": 0}
+        ],
+      });
+      final body = Map<String, dynamic>.from(r.data as Map);
+      final data = body["data"];
+      if (data is Map && data["id"] != null) {
+        _lastOrderId = data["id"].toString();
+      }
+      setState(() => _log = "CREATE ORDER OK\n$body");
+    });
+  }
+
+  Future<void> _scannerValidate() async {
+    await _withAuth(() async {
+      if (_lastOrderId == null) {
+        setState(() => _log = "Create an order first (or set order id)");
+        return;
+      }
+      final r = await _dio.post("/scanner/validate", data: {
+        "orderId": _lastOrderId,
+        "sku": "SKU-001",
+        "qty": 1,
+      });
+      setState(() => _log = "SCANNER OK\n${r.data}");
+    });
+  }
+
+  Future<void> _startRecording() async {
+    await _withAuth(() async {
+      final wid = _user?["warehouseId"];
+      final oid = _lastOrderId;
+      if (oid == null || wid == null) {
+        setState(() => _log = "Need orderId + warehouseId — create order first");
+        return;
+      }
+      final r = await _dio.post("/recordings/start", data: {
+        "orderId": oid,
+        "warehouseId": wid,
+      });
+      setState(() => _log = "RECORDING START OK\n${r.data}");
+    });
+  }
+
   Future<void> _signOut() async {
     await widget.auth.signOut();
     if (mounted) {
@@ -407,7 +410,7 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       body: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -415,23 +418,28 @@ class _HomePageState extends State<HomePage> {
               Card(
                 child: ListTile(
                   leading: const Icon(Icons.person),
-                  title: Text("${_user!["email"] ?? ""} · ${_user!["role"] ?? ""}"),
-                  subtitle: Text(
-                      "Company: ${_user!["companyId"] ?? "-"}\nUser: ${_user!["id"] ?? "-"}"),
+                  title: Text("${_user!["email"]} · ${_user!["role"]}"),
+                  subtitle: Text("Co: ${_user!["companyId"]}\nWH: ${_user!["warehouseId"]}"),
                 ),
               ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 6,
+              runSpacing: 6,
               children: [
                 FilledButton(onPressed: _busy ? null : _health, child: const Text("Health")),
                 FilledButton(onPressed: _busy ? null : _sync, child: const Text("Sync")),
                 FilledButton(onPressed: _busy ? null : _company, child: const Text("Company")),
                 FilledButton(onPressed: _busy ? null : _orders, child: const Text("Orders")),
+                FilledButton.tonal(
+                    onPressed: _busy ? null : _createOrder, child: const Text("Create order")),
+                FilledButton.tonal(
+                    onPressed: _busy ? null : _scannerValidate, child: const Text("Scan SKU-001")),
+                FilledButton.tonal(
+                    onPressed: _busy ? null : _startRecording, child: const Text("Start recording")),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
             if (_busy) const LinearProgressIndicator(),
             Expanded(
               child: Container(
@@ -443,7 +451,7 @@ class _HomePageState extends State<HomePage> {
                     style: const TextStyle(
                       color: Colors.lightGreenAccent,
                       fontFamily: "Consolas",
-                      fontSize: 13,
+                      fontSize: 12,
                     ),
                   ),
                 ),
