@@ -3,14 +3,121 @@
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  UnauthorizedException,
+  ConflictException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { verifyToken } from "@clerk/backend";
 import { PrismaService } from "../prisma/prisma.service";
 import { createHash, randomBytes } from "crypto";
 import { AuthUser } from "../common/decorators/current-user.decorator";
+import { Role, UserStatus, Status, Plan } from "@prisma/client";
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
+
+  private async verifyClerkJwt(clerkJwt: string) {
+    const secretKey =
+      this.config.get<string>("clerk.secretKey") ||
+      this.config.get<string>("CLERK_SECRET_KEY");
+    if (!secretKey || secretKey.includes("PLACE")) {
+      throw new UnauthorizedException("Clerk is not configured");
+    }
+    try {
+      return await verifyToken(clerkJwt, {
+        secretKey,
+        clockSkewInMs: 120_000,
+      });
+    } catch (e: any) {
+      throw new UnauthorizedException(
+        `Invalid Clerk session (${e?.reason || e?.message || "verify failed"})`,
+      );
+    }
+  }
+
+  /**
+   * Self-serve: first owner creates company + links clerkId.
+   * clerkId ALWAYS from verified JWT sub — never trust client-only id.
+   */
+  async registerCompany(
+    clerkJwt: string,
+    dto: { companyName: string; ownerName: string; email: string; phone?: string },
+  ) {
+    const payload: any = await this.verifyClerkJwt(clerkJwt);
+    const clerkId = String(payload.sub || "");
+    if (!clerkId) throw new UnauthorizedException("Token missing subject");
+
+    const email = (dto.email || "").trim().toLowerCase();
+    if (!email) throw new BadRequestException("email required");
+
+    const existing = await this.prisma.user.findFirst({
+      where: { OR: [{ clerkId }, { email }] },
+    });
+    if (existing?.clerkId === clerkId) {
+      return {
+        companyId: existing.companyId,
+        userId: existing.id,
+        role: existing.role,
+        email: existing.email,
+        alreadyRegistered: true,
+      };
+    }
+    if (existing && existing.email === email && existing.clerkId && existing.clerkId !== clerkId) {
+      throw new ConflictException("Email already linked to another Clerk user");
+    }
+
+    const companyName = (dto.companyName || "").trim();
+    const ownerName = (dto.ownerName || "").trim();
+    if (companyName.length < 2) throw new BadRequestException("companyName too short");
+    if (ownerName.length < 2) throw new BadRequestException("ownerName too short");
+
+    const emailTaken = await this.prisma.company.findUnique({ where: { email } });
+    if (emailTaken) throw new ConflictException("Company email already registered");
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const company = await tx.company.create({
+        data: {
+          companyName,
+          email,
+          phone: dto.phone?.trim() || "",
+          status: Status.active,
+          plan: Plan.free,
+        },
+      });
+      const user = await tx.user.create({
+        data: {
+          companyId: company.id,
+          email,
+          name: ownerName,
+          phone: dto.phone?.trim() || "",
+          role: Role.company_admin,
+          status: UserStatus.active,
+          clerkId,
+          lastLoginAt: new Date(),
+        },
+        select: {
+          id: true,
+          companyId: true,
+          role: true,
+          email: true,
+          name: true,
+        },
+      });
+      return { company, user };
+    });
+
+    return {
+      companyId: result.company.id,
+      userId: result.user.id,
+      role: result.user.role,
+      email: result.user.email,
+      alreadyRegistered: false,
+    };
+  }
 
   async acceptInvite(inviteToken: string, clerkId: string, email: string) {
     const tokenHash = createHash("sha256").update(inviteToken).digest("hex");

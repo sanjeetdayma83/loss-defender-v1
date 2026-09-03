@@ -1,11 +1,13 @@
 ﻿import {
-  Controller, Get, Post, Delete, Body, Param, HttpCode, HttpStatus,
+  Controller, Get, Post, Delete, Body, Param, Req, HttpCode, HttpStatus,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth, ApiOperation } from "@nestjs/swagger";
 import { AuthService } from "./auth.service";
 import { Public } from "../common/decorators/public.decorator";
 import { CurrentUser, AuthUser } from "../common/decorators/current-user.decorator";
-import { IsString, IsNotEmpty, IsEmail } from "class-validator";
+import { IsString, IsNotEmpty, IsEmail, IsOptional, MinLength } from "class-validator";
+import { Request } from "express";
 
 class AcceptInviteDto {
   @IsString() @IsNotEmpty() inviteToken!: string;
@@ -13,10 +15,30 @@ class AcceptInviteDto {
   @IsEmail() email!: string;
 }
 
+class RegisterCompanyDto {
+  @IsString() @MinLength(2) companyName!: string;
+  @IsString() @MinLength(2) ownerName!: string;
+  @IsEmail() email!: string;
+  @IsOptional() @IsString() phone?: string;
+}
+
 @ApiTags("auth")
 @Controller("auth")
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Public()
+  @Post("register-company")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Create company + company_admin linked to Clerk JWT" })
+  async registerCompany(@Req() req: Request, @Body() dto: RegisterCompanyDto) {
+    const auth = req.headers["authorization"];
+    if (!auth?.startsWith("Bearer ")) {
+      throw new UnauthorizedException("Bearer Clerk session required");
+    }
+    const data = await this.authService.registerCompany(auth.slice(7), dto);
+    return { success: true, data, error: null };
+  }
 
   @Public()
   @Post("accept-invite")
