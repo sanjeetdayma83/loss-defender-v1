@@ -79,7 +79,7 @@ export class OrdersService {
         marketplaceOrderId: dto.marketplaceOrderId,
         warehouseId: dto.warehouseId || user.warehouseId,
         items: items as any,
-        status: "synced",
+        status: "queued",
       },
     });
 

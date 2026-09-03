@@ -1,123 +1,23 @@
-﻿import {
+import {
   Injectable,
   BadRequestException,
   NotFoundException,
   ForbiddenException,
-  UnauthorizedException,
-  ConflictException,
+  Logger,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { verifyToken } from "@clerk/backend";
 import { PrismaService } from "../prisma/prisma.service";
 import { createHash, randomBytes } from "crypto";
 import { AuthUser } from "../common/decorators/current-user.decorator";
-import { Role, UserStatus, Status, Plan } from "@prisma/client";
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
   ) {}
-
-  private async verifyClerkJwt(clerkJwt: string) {
-    const secretKey =
-      this.config.get<string>("clerk.secretKey") ||
-      this.config.get<string>("CLERK_SECRET_KEY");
-    if (!secretKey || secretKey.includes("PLACE")) {
-      throw new UnauthorizedException("Clerk is not configured");
-    }
-    try {
-      return await verifyToken(clerkJwt, {
-        secretKey,
-        clockSkewInMs: 120_000,
-      });
-    } catch (e: any) {
-      throw new UnauthorizedException(
-        `Invalid Clerk session (${e?.reason || e?.message || "verify failed"})`,
-      );
-    }
-  }
-
-  /**
-   * Self-serve: first owner creates company + links clerkId.
-   * clerkId ALWAYS from verified JWT sub — never trust client-only id.
-   */
-  async registerCompany(
-    clerkJwt: string,
-    dto: { companyName: string; ownerName: string; email: string; phone?: string },
-  ) {
-    const payload: any = await this.verifyClerkJwt(clerkJwt);
-    const clerkId = String(payload.sub || "");
-    if (!clerkId) throw new UnauthorizedException("Token missing subject");
-
-    const email = (dto.email || "").trim().toLowerCase();
-    if (!email) throw new BadRequestException("email required");
-
-    const existing = await this.prisma.user.findFirst({
-      where: { OR: [{ clerkId }, { email }] },
-    });
-    if (existing?.clerkId === clerkId) {
-      return {
-        companyId: existing.companyId,
-        userId: existing.id,
-        role: existing.role,
-        email: existing.email,
-        alreadyRegistered: true,
-      };
-    }
-    if (existing && existing.email === email && existing.clerkId && existing.clerkId !== clerkId) {
-      throw new ConflictException("Email already linked to another Clerk user");
-    }
-
-    const companyName = (dto.companyName || "").trim();
-    const ownerName = (dto.ownerName || "").trim();
-    if (companyName.length < 2) throw new BadRequestException("companyName too short");
-    if (ownerName.length < 2) throw new BadRequestException("ownerName too short");
-
-    const emailTaken = await this.prisma.company.findUnique({ where: { email } });
-    if (emailTaken) throw new ConflictException("Company email already registered");
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      const company = await tx.company.create({
-        data: {
-          companyName,
-          email,
-          phone: dto.phone?.trim() || "",
-          status: Status.active,
-          plan: Plan.free,
-        },
-      });
-      const user = await tx.user.create({
-        data: {
-          companyId: company.id,
-          email,
-          name: ownerName,
-          phone: dto.phone?.trim() || "",
-          role: Role.company_admin,
-          status: UserStatus.active,
-          clerkId,
-          lastLoginAt: new Date(),
-        },
-        select: {
-          id: true,
-          companyId: true,
-          role: true,
-          email: true,
-          name: true,
-        },
-      });
-      return { company, user };
-    });
-
-    return {
-      companyId: result.company.id,
-      userId: result.user.id,
-      role: result.user.role,
-      email: result.user.email,
-      alreadyRegistered: false,
-    };
-  }
 
   async acceptInvite(inviteToken: string, clerkId: string, email: string) {
     const tokenHash = createHash("sha256").update(inviteToken).digest("hex");
@@ -134,6 +34,9 @@ export class AuthService {
     }
     if (user.clerkId) throw new BadRequestException("Invite already accepted");
 
+    const linked = await this.prisma.user.findUnique({ where: { clerkId } });
+    if (linked) throw new BadRequestException("Clerk user already linked");
+
     const [updated] = await this.prisma.$transaction([
       this.prisma.user.update({
         where: { id: user.id },
@@ -148,6 +51,111 @@ export class AuthService {
       }),
     ]);
     return updated;
+  }
+
+  /**
+   * First-owner self-serve. Clerk JWT already verified in controller.
+   * No silent tenant on bare signup without this call.
+   */
+  async registerCompany(
+    clerkId: string,
+    emailFromToken: string | undefined,
+    dto: { companyName: string; ownerName: string; email: string; phone: string },
+  ) {
+    const existing = await this.prisma.user.findUnique({ where: { clerkId } });
+    if (existing) {
+      throw new BadRequestException("Clerk user already linked to a company");
+    }
+
+    const email = (dto.email || emailFromToken || "").toLowerCase().trim();
+    if (!email) throw new BadRequestException("email required");
+    if (!dto.companyName?.trim()) throw new BadRequestException("companyName required");
+
+    const emailTaken = await this.prisma.user.findUnique({ where: { email } });
+    if (emailTaken) throw new BadRequestException("Email already registered");
+
+    return this.prisma.$transaction(async (tx) => {
+      const company = await tx.company.create({
+        data: {
+          companyName: dto.companyName.trim(),
+          email,
+          phone: dto.phone || "",
+          plan: "free",
+          status: "active",
+        },
+      });
+
+      const warehouse = await tx.warehouse.create({
+        data: {
+          companyId: company.id,
+          name: "Main Warehouse",
+          code: "MAIN",
+          address: {},
+          city: "N/A",
+          state: "N/A",
+          country: "India",
+          timezone: "Asia/Kolkata",
+          status: "active",
+        },
+      });
+
+      const user = await tx.user.create({
+        data: {
+          clerkId,
+          companyId: company.id,
+          email,
+          name: dto.ownerName?.trim() || email.split("@")[0],
+          phone: dto.phone || "",
+          role: "company_admin",
+          status: "active",
+          warehouseId: warehouse.id,
+          lastLoginAt: new Date(),
+        },
+        select: {
+          id: true,
+          companyId: true,
+          role: true,
+          warehouseId: true,
+          email: true,
+          name: true,
+          clerkId: true,
+        },
+      });
+
+      this.logger.log(`register-company company=${company.id} user=${user.id}`);
+      return { company: { id: company.id, companyName: company.companyName }, warehouse: { id: warehouse.id }, user };
+    });
+  }
+
+  async handleClerkWebhook(evt: { type?: string; data?: any }) {
+    const type = evt?.type;
+    const data = evt?.data;
+    if (!type || !data) return { ok: true, skipped: true };
+
+    if (type === "user.deleted") {
+      const clerkId = data.id as string;
+      if (clerkId) {
+        await this.prisma.user.updateMany({
+          where: { clerkId },
+          data: { status: "deleted", clerkId: null },
+        });
+      }
+      return { ok: true, action: "user.deleted" };
+    }
+
+    if (type === "user.updated") {
+      const clerkId = data.id as string;
+      const email = data.email_addresses?.[0]?.email_address as string | undefined;
+      if (clerkId && email) {
+        await this.prisma.user.updateMany({
+          where: { clerkId },
+          data: { email: email.toLowerCase() },
+        });
+      }
+      return { ok: true, action: "user.updated" };
+    }
+
+    return { ok: true, ignored: type };
   }
 
   async sync(user: AuthUser) {
@@ -201,6 +209,7 @@ export class AuthService {
     const tokenHash = createHash("sha256").update(raw).digest("hex");
     const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
     await this.prisma.inviteToken.create({ data: { userId, tokenHash, expiresAt } });
+    this.logger.log(`[INVITE] userId=${userId} token created (deliver via email in prod)`);
     return raw;
   }
 }
