@@ -3,9 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { Queue, Worker, JobsOptions } from "bullmq";
 import IORedis from "ioredis";
 
-/**
- * Optional queue. If REDIS_URL missing/unreachable, jobs are no-ops (logged).
- */
+/** Optional queue. Missing/unreachable Redis = disabled, no retry spam. */
 @Injectable()
 export class QueueService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(QueueService.name);
@@ -18,39 +16,58 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly config: ConfigService) {}
 
   async onModuleInit() {
-    const url = this.config.get<string>("REDIS_URL") || process.env.REDIS_URL;
+    const url =
+      this.config.get<string>("redis.url") ||
+      this.config.get<string>("REDIS_URL") ||
+      process.env.REDIS_URL;
+
+    if (!url || url.includes("localhost") || url.includes("127.0.0.1")) {
+      // Local default without real Redis → stay off unless FORCE_REDIS=true
+      if (process.env.FORCE_REDIS !== "true") {
+        this.log.warn("Queues disabled (no Redis / local URL without FORCE_REDIS=true)");
+        return;
+      }
+    }
     if (!url) {
       this.log.warn("REDIS_URL not set — queues disabled");
       return;
     }
+
     try {
-      this.connection = new IORedis(url, { maxRetriesPerRequest: null, lazyConnect: true });
-      await this.connection.connect();
+      this.connection = new IORedis(url, {
+        maxRetriesPerRequest: null,
+        lazyConnect: true,
+        enableOfflineQueue: false,
+        showFriendlyErrorStack: false,
+        retryStrategy: () => null, // do not reconnect loop
+      });
+      this.connection.on("error", (err) => {
+        this.log.warn(`Redis error (queues off): ${err.message}`);
+      });
+
+      await Promise.race([
+        this.connection.connect(),
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error("Redis connect timeout")), 2000),
+        ),
+      ]);
+
       this.notifyQueue = new Queue("notifications", { connection: this.connection });
       this.evidenceQueue = new Queue("evidence", { connection: this.connection });
-
       this.workers.push(
-        new Worker(
-          "notifications",
-          async (job) => {
-            this.log.log(`notify job ${job.id}: ${JSON.stringify(job.data)}`);
-            // Future: email/FCM providers
-          },
-          { connection: this.connection },
-        ),
-        new Worker(
-          "evidence",
-          async (job) => {
-            this.log.log(`evidence job ${job.id}: ${JSON.stringify(job.data)}`);
-            // Future: FFmpeg frame extract
-          },
-          { connection: this.connection },
-        ),
+        new Worker("notifications", async (job) => {
+          this.log.log(`notify job ${job.id}`);
+        }, { connection: this.connection }),
+        new Worker("evidence", async (job) => {
+          this.log.log(`evidence job ${job.id}`);
+        }, { connection: this.connection }),
       );
       this.enabled = true;
       this.log.log("BullMQ queues ready");
-    } catch (e) {
-      this.log.warn(`Redis unavailable — queues disabled: ${e}`);
+    } catch (e: any) {
+      this.log.warn(`Redis unavailable — queues disabled: ${e?.message || e}`);
+      try { this.connection?.disconnect(); } catch { /* ignore */ }
+      this.connection = null;
       this.enabled = false;
     }
   }
@@ -59,22 +76,16 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     for (const w of this.workers) await w.close().catch(() => {});
     await this.notifyQueue?.close().catch(() => {});
     await this.evidenceQueue?.close().catch(() => {});
-    this.connection?.disconnect();
+    try { this.connection?.disconnect(); } catch { /* ignore */ }
   }
 
   async enqueueNotify(data: Record<string, unknown>, opts?: JobsOptions) {
-    if (!this.enabled || !this.notifyQueue) {
-      this.log.debug(`notify skipped (queue off): ${JSON.stringify(data)}`);
-      return null;
-    }
+    if (!this.enabled || !this.notifyQueue) return null;
     return this.notifyQueue.add("deliver", data, opts);
   }
 
   async enqueueEvidence(data: Record<string, unknown>, opts?: JobsOptions) {
-    if (!this.enabled || !this.evidenceQueue) {
-      this.log.debug(`evidence skipped (queue off): ${JSON.stringify(data)}`);
-      return null;
-    }
+    if (!this.enabled || !this.evidenceQueue) return null;
     return this.evidenceQueue.add("process", data, opts);
   }
 }

@@ -172,4 +172,3 @@ export class UsersService {
     return updated;
   }
 }
-}
