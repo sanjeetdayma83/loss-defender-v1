@@ -1,9 +1,11 @@
+import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter_riverpod/flutter_riverpod.dart";
 import "package:go_router/go_router.dart";
-import "package:clerk_flutter/clerk_flutter.dart";
+import "package:url_launcher/url_launcher.dart";
 import "../../config/env.dart";
 import "../../core/auth/session_provider.dart";
+// agar session_provider nahi: apna auth applyToken / signInWithToken path use karo
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -12,128 +14,115 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  String? _linkError;
-  bool _linking = false;
+  final _tokenCtrl = TextEditingController();
+  String? _error;
+  bool _busy = false;
 
-  Future<void> _linkBackend(ClerkAuthState authState) async {
-    if (_linking) return;
-    setState(() {
-      _linking = true;
-      _linkError = null;
-    });
+  // Clerk Dashboard → Configure → Account Portal → Sign-in URL
+  // Example: https://cute-lobster-2676.accounts.dev/sign-in
+  static const clerkSignInUrl = String.fromEnvironment(
+    "CLERK_SIGN_IN_URL",
+    defaultValue: "https://cute-lobster-2676.accounts.dev/sign-in",
+  );
+  static const clerkSignUpUrl = String.fromEnvironment(
+    "CLERK_SIGN_UP_URL",
+    defaultValue: "https://cute-lobster-2676.accounts.dev/sign-up",
+  );
+
+  Future<void> _open(String url) async {
+    final u = Uri.parse(url);
+    if (!await launchUrl(u, mode: LaunchMode.externalApplication)) {
+      setState(() => _error = "Could not open $url");
+    }
+  }
+
+  Future<void> _continueWithToken() async {
+    setState(() { _busy = true; _error = null; });
     try {
-      final sessionToken = await authState.sessionToken();
-      final jwt = sessionToken.jwt;
-      final err = await ref.read(sessionProvider.notifier).applyToken(
-            jwt,
-            clerkUserId: authState.user?.id,
-          );
+      final err = await ref.read(sessionProvider.notifier).signInWithToken(_tokenCtrl.text);
       if (!mounted) return;
       if (err != null) {
-        setState(() {
-          _linkError = err;
-          _linking = false;
-        });
+        setState(() { _error = err; _busy = false; });
         return;
       }
       context.go("/dashboard");
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _linkError = e.toString();
-          _linking = false;
-        });
-      }
+      setState(() { _error = e.toString(); _busy = false; });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!Env.hasClerkKey) {
-      return const Scaffold(
-        body: Center(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: Text(
-              "Set CLERK_PUBLISHABLE_KEY.\n\n"
-              "Either edit lib/config/env.dart defaultValue, or run:\n"
-              "flutter run -d chrome --dart-define=CLERK_PUBLISHABLE_KEY=pk_test_xxx",
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ),
-      );
-    }
-
     return Scaffold(
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
+            constraints: const BoxConstraints(maxWidth: 420),
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(24),
               child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 12),
-                  Text(
-                    "LOSS DEFENDER V1",
-                    style: Theme.of(context).textTheme.headlineSmall,
+                  Text("LOSS DEFENDER V1",
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.headlineSmall),
+                  const SizedBox(height: 8),
+                  const Text(
+                    "Sign in with Clerk (hosted). Then paste session token once.",
+                    textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 4),
-                  const Text("Sign in or create account"),
-                  const SizedBox(height: 16),
-                  Expanded(
-                    child: ClerkErrorListener(
-                      child: ClerkAuthBuilder(
-                        signedOutBuilder: (context, authState) {
-                          // Full Clerk UI: sign-in, sign-up, forgot password flows
-                          return const SingleChildScrollView(
-                            child: ClerkAuthentication(),
-                          );
-                        },
-                        signedInBuilder: (context, authState) {
-                          // Auto-link Nest user via /auth/sync
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            _linkBackend(authState);
-                          });
-                          if (_linkError != null) {
-                            return Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(_linkError!,
-                                    style: const TextStyle(color: Colors.red),
-                                    textAlign: TextAlign.center),
-                                const SizedBox(height: 12),
-                                const Text(
-                                  "If account is not invited, ask admin to invite your email first.",
-                                  textAlign: TextAlign.center,
-                                ),
-                                const SizedBox(height: 12),
-                                FilledButton(
-                                  onPressed: () async {
-                                    await authState.signOut();
-                                    setState(() {
-                                      _linkError = null;
-                                      _linking = false;
-                                    });
-                                  },
-                                  child: const Text("Sign out & try again"),
-                                ),
-                              ],
-                            );
-                          }
-                          return const Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              CircularProgressIndicator(),
-                              SizedBox(height: 12),
-                              Text("Connecting to LOSS DEFENDER..."),
-                            ],
-                          );
-                        },
-                      ),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: () => _open(clerkSignInUrl),
+                    icon: const Icon(Icons.login),
+                    label: const Text("Sign in (Clerk)"),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () => _open(clerkSignUpUrl),
+                    icon: const Icon(Icons.person_add),
+                    label: const Text("Sign up (Clerk)"),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () => _open("$clerkSignInUrl#/factor-password"),
+                    child: const Text("Forgot password"),
+                  ),
+                  const Divider(height: 32),
+                  const Text(
+                    "After Clerk sign-in, open that tab Console:\n"
+                    "await window.Clerk.session.getToken()\n"
+                    "Paste JWT below:",
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _tokenCtrl,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: "Session JWT",
+                      border: OutlineInputBorder(),
                     ),
                   ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 8),
+                    Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+                  ],
+                  const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: _busy ? null : _continueWithToken,
+                    child: Text(_busy ? "…" : "Continue to app"),
+                  ),
+                  if (!kIsWeb && Env.hasClerkKey)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 16),
+                      child: Text(
+                        "Mobile: embedded Clerk UI available in next build.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                    ),
                 ],
               ),
             ),
