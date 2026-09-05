@@ -27,11 +27,7 @@ export class UploadService {
     const prefix = recording.b2KeyPrefix || `recordings/${user.companyId}/${recording.id}`;
     const key = `${prefix}/seg-${String(dto.sequence).padStart(4, "0")}.mp4`;
     const contentType = dto.contentType || "video/mp4";
-
-    // Simple single-PUT signed URL (works for segments < ~5GB with B2)
     const signedUrl = await this.storage.getUploadSignedUrl(key, contentType);
-
-    // Also support multipart for large files
     const multipart = await this.storage.createMultipart(key, contentType);
 
     return {
@@ -54,7 +50,6 @@ export class UploadService {
       where: { id: dto.recordingId, companyId: user.companyId },
     });
     if (!recording) throw new NotFoundException("Recording not found");
-
     const signedUrl = await this.storage.signPart(dto.key, dto.uploadId, dto.partNumber);
     return { signedUrl, partNumber: dto.partNumber };
   }
@@ -80,6 +75,18 @@ export class UploadService {
       await this.storage.completeMultipart(dto.b2Key, dto.uploadId, dto.parts);
     }
 
+    const existing = await this.prisma.recordingSegment.findUnique({
+      where: {
+        recordingId_sequence: {
+          recordingId: dto.recordingId,
+          sequence: dto.sequence,
+        },
+      },
+    });
+    const prevBytes = existing?.sizeBytes ?? 0n;
+    const newBytes = BigInt(dto.sizeBytes);
+    const delta = newBytes - prevBytes;
+
     const segment = await this.prisma.recordingSegment.upsert({
       where: {
         recordingId_sequence: {
@@ -92,13 +99,13 @@ export class UploadService {
         sequence: dto.sequence,
         b2Key: dto.b2Key,
         checksum: dto.checksum,
-        sizeBytes: BigInt(dto.sizeBytes),
+        sizeBytes: newBytes,
         uploadedAt: new Date(),
       },
       update: {
         b2Key: dto.b2Key,
         checksum: dto.checksum,
-        sizeBytes: BigInt(dto.sizeBytes),
+        sizeBytes: newBytes,
         uploadedAt: new Date(),
       },
     });
@@ -111,11 +118,35 @@ export class UploadService {
       data: { segmentCount: count },
     });
 
+    if (delta !== 0n) {
+      await this.prisma.company.update({
+        where: { id: user.companyId },
+        data: { storageUsed: { increment: delta } },
+      });
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        companyId: user.companyId,
+        actorId: user.id,
+        action: "upload.complete",
+        entityType: "RecordingSegment",
+        entityId: segment.id,
+        afterState: {
+          recordingId: dto.recordingId,
+          sequence: dto.sequence,
+          sizeBytes: dto.sizeBytes,
+          deltaBytes: delta.toString(),
+        },
+      },
+    });
+
     return {
       segmentId: segment.id,
       sequence: segment.sequence,
       b2Key: segment.b2Key,
       segmentCount: count,
+      storageDeltaBytes: delta.toString(),
     };
   }
 }

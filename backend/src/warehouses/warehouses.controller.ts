@@ -4,6 +4,7 @@ import { IsString, IsNotEmpty, IsOptional, IsObject } from "class-validator";
 import { WarehousesService } from "./warehouses.service";
 import { CurrentUser, AuthUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
+import { PlanLimit } from "../common/decorators/plan-limit.decorator";
 
 class CreateWarehouseDto {
   @IsString() @IsNotEmpty() name!: string;
@@ -49,6 +50,7 @@ export class WarehousesController {
   }
 
   @Post()
+  @PlanLimit("warehouses")
   @Roles("company_admin", "super_admin")
   async create(@CurrentUser() user: AuthUser, @Body() dto: CreateWarehouseDto) {
     const data = await this.warehousesService.create(user, dto);

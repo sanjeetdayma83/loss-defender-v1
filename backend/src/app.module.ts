@@ -5,6 +5,7 @@ import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
 import configuration from "./config/configuration";
 import { PrismaModule } from "./prisma/prisma.module";
 import { StorageModule } from "./storage/storage.module";
+import { QueueModule } from "./queue/queue.module";
 import { ClerkAuthGuard } from "./common/guards/clerk-auth.guard";
 import { TenantGuard } from "./common/guards/tenant.guard";
 import { RolesGuard } from "./common/guards/roles.guard";
@@ -26,6 +27,7 @@ import { AuditModule } from "./audit/audit.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { BillingModule } from "./billing/billing.module";
 import { NotificationsModule } from "./notifications/notifications.module";
+import { AdminModule } from "./admin/admin.module";
 import { HealthController } from "./health.controller";
 
 @Module({
@@ -34,6 +36,7 @@ import { HealthController } from "./health.controller";
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     PrismaModule,
     StorageModule,
+    QueueModule,
     AuthModule,
     CompaniesModule,
     UsersModule,
@@ -50,6 +53,7 @@ import { HealthController } from "./health.controller";
     AnalyticsModule,
     BillingModule,
     NotificationsModule,
+    AdminModule,
   ],
   controllers: [HealthController],
   providers: [

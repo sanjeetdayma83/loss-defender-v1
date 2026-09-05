@@ -5,6 +5,7 @@ import { UsersService } from "./users.service";
 import { CurrentUser, AuthUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
 import { PlanLimit } from "../common/decorators/plan-limit.decorator";
+import { RequirePermission } from "../common/decorators/permissions.decorator";
 
 class InviteDto {
   @IsString() @IsNotEmpty() name!: string;
@@ -70,6 +71,7 @@ export class UsersController {
 
   /** Soft-delete = status deleted (keeps audit trail) */
   @Delete(":id")
+  @RequirePermission("users.invite")
   @Roles("company_admin", "super_admin")
   async remove(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     const data = await this.usersService.softDelete(user, id);

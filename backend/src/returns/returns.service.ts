@@ -2,12 +2,16 @@ import {
   Injectable, NotFoundException, BadRequestException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { tenantWhere } from "../common/utils/tenant-where";
 import { AuthUser } from "../common/decorators/current-user.decorator";
 
 @Injectable()
 export class ReturnsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async list(
     user: AuthUser,
@@ -85,12 +89,32 @@ export class ReturnsService {
     if (!existing) throw new NotFoundException("Return not found");
     if (existing.decision) throw new BadRequestException("Already decided");
 
-    return this.prisma.return.update({
+    const updated = await this.prisma.return.update({
       where: { id },
       data: {
         decision: dto.decision,
         decidedAt: new Date(),
       },
     });
+
+    await this.prisma.auditLog.create({
+      data: {
+        companyId: user.companyId,
+        actorId: user.id,
+        action: "return.decide",
+        entityType: "Return",
+        entityId: id,
+        afterState: { decision: dto.decision },
+      },
+    });
+
+    await this.notifications.enqueue(user.companyId, "in_app", {
+      type: "return.decided",
+      returnId: id,
+      decision: dto.decision,
+    }, user.id);
+
+    return updated;
+  }
   }
 }

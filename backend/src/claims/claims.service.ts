@@ -2,12 +2,16 @@ import {
   Injectable, NotFoundException, BadRequestException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { tenantWhere } from "../common/utils/tenant-where";
 import { AuthUser } from "../common/decorators/current-user.decorator";
 
 @Injectable()
 export class ClaimsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async list(
     user: AuthUser,
@@ -129,6 +133,12 @@ export class ClaimsService {
         afterState: { decision: dto.decision },
       },
     });
+
+    await this.notifications.enqueue(user.companyId, "in_app", {
+      type: "claim.decided",
+      claimId: id,
+      decision: dto.decision,
+    }, user.id);
 
     return updated;
   }

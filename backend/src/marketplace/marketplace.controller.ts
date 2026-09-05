@@ -7,6 +7,7 @@ import { Request } from "express";
 import { MarketplaceService } from "./marketplace.service";
 import { CurrentUser, AuthUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
+import { RequirePermission } from "../common/decorators/permissions.decorator";
 import { Public } from "../common/decorators/public.decorator";
 
 class ConnectBody {
@@ -38,6 +39,7 @@ export class MarketplaceController {
   }
 
   @Post("connect")
+  @RequirePermission("marketplace.connect")
   @Roles("company_admin", "marketplace_manager", "super_admin")
   async connect(@CurrentUser() user: AuthUser, @Body() body: ConnectBody) {
     const data = await this.marketplaceService.connect(user, body);

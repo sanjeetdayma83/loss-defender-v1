@@ -7,6 +7,7 @@ import { Request } from "express";
 import { BillingService } from "./billing.service";
 import { CurrentUser, AuthUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
+import { RequirePermission } from "../common/decorators/permissions.decorator";
 import { Public } from "../common/decorators/public.decorator";
 
 class SubscribeBody {
@@ -36,6 +37,7 @@ export class BillingController {
 
   @Post("subscribe")
   @ApiBearerAuth()
+  @RequirePermission("billing.manage")
   @Roles("company_admin", "super_admin")
   async subscribe(@CurrentUser() user: AuthUser, @Body() body: SubscribeBody) {
     const data = await this.billingService.subscribe(user, body);
