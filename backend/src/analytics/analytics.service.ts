@@ -18,6 +18,8 @@ export class AnalyticsService {
       openClaims,
       activeUsers,
       warehouses,
+      company,
+      sub,
     ] = await Promise.all([
       this.prisma.order.count({ where: tenantWhere(cid) }),
       this.prisma.order.count({ where: tenantWhere(cid, { status: "dispatched" }) }),
@@ -29,6 +31,11 @@ export class AnalyticsService {
       }),
       this.prisma.user.count({ where: tenantWhere(cid, { status: "active" }) }),
       this.prisma.warehouse.count({ where: tenantWhere(cid, { status: "active" }) }),
+      this.prisma.company.findFirst({
+        where: { id: cid },
+        select: { plan: true, storageUsed: true, storageQuota: true },
+      }),
+      this.prisma.billingSubscription.findUnique({ where: { companyId: cid } }),
     ]);
 
     const withEvidence = await this.prisma.order.count({
@@ -37,6 +44,11 @@ export class AnalyticsService {
 
     const evidenceCoverage =
       ordersTotal > 0 ? Math.round((withEvidence / ordersTotal) * 1000) / 10 : 0;
+
+    const used = company?.storageUsed ?? 0n;
+    const quota = company?.storageQuota ?? 1n;
+    const storageUsedPercent =
+      quota > 0n ? Math.round(Number((used * 1000n) / quota)) / 10 : 0;
 
     return {
       ordersTotal,
@@ -48,6 +60,11 @@ export class AnalyticsService {
       activeUsers,
       warehouses,
       evidenceCoveragePercent: evidenceCoverage,
+      plan: company?.plan ?? "free",
+      storageUsedBytes: used.toString(),
+      storageQuotaBytes: quota.toString(),
+      storageUsedPercent,
+      subscriptionStatus: sub?.status ?? null,
     };
   }
 }

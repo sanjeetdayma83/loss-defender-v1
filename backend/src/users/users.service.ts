@@ -138,4 +138,38 @@ export class UsersService {
 
     return updated;
   }
+
+  async softDelete(user: AuthUser, id: string) {
+    if (id === user.id) {
+      throw new ForbiddenException("Cannot delete your own account");
+    }
+    const target = await this.prisma.user.findFirst({
+      where: tenantWhere(user.companyId, { id }),
+    });
+    if (!target) throw new NotFoundException("User not found");
+    if (target.status === "deleted") {
+      return { id, status: "deleted", alreadyDeleted: true };
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: { status: "deleted" },
+      select: { id: true, email: true, status: true, role: true },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        companyId: user.companyId,
+        actorId: user.id,
+        action: "user.soft_delete",
+        entityType: "User",
+        entityId: id,
+        beforeState: { status: target.status, role: target.role },
+        afterState: { status: "deleted" },
+      },
+    });
+
+    return updated;
+  }
+}
 }

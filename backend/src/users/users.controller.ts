@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Patch, Param, Body, Query } from "@nestjs/common";
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { IsString, IsNotEmpty, IsEmail, IsOptional, IsIn } from "class-validator";
 import { UsersService } from "./users.service";
 import { CurrentUser, AuthUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
+import { PlanLimit } from "../common/decorators/plan-limit.decorator";
 
 class InviteDto {
   @IsString() @IsNotEmpty() name!: string;
@@ -53,6 +54,7 @@ export class UsersController {
   }
 
   @Post("invite")
+  @PlanLimit("users")
   @Roles("company_admin", "super_admin")
   async invite(@CurrentUser() user: AuthUser, @Body() dto: InviteDto) {
     const data = await this.usersService.invite(user, dto);
@@ -63,6 +65,14 @@ export class UsersController {
   @Roles("company_admin", "super_admin")
   async update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: UpdateUserDto) {
     const data = await this.usersService.update(user, id, dto);
+    return { success: true, data, error: null };
+  }
+
+  /** Soft-delete = status deleted (keeps audit trail) */
+  @Delete(":id")
+  @Roles("company_admin", "super_admin")
+  async remove(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const data = await this.usersService.softDelete(user, id);
     return { success: true, data, error: null };
   }
 }

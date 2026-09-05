@@ -167,4 +167,56 @@ export class RecordingsService {
     if (!row) throw new NotFoundException("Recording not found");
     return row;
   }
+
+  async addSegment(
+    user: AuthUser,
+    recordingId: string,
+    dto: { sequence: number; b2Key: string; checksum: string; sizeBytes: number },
+  ) {
+    const recording = await this.prisma.recording.findFirst({
+      where: { id: recordingId, companyId: user.companyId },
+    });
+    if (!recording) throw new NotFoundException("Recording not found");
+    if (recording.status === "completed" || recording.status === "failed") {
+      throw new BadRequestException(`Cannot add segment to ${recording.status} recording`);
+    }
+
+    const segment = await this.prisma.recordingSegment.upsert({
+      where: {
+        recordingId_sequence: {
+          recordingId,
+          sequence: dto.sequence,
+        },
+      },
+      create: {
+        recordingId,
+        sequence: dto.sequence,
+        b2Key: dto.b2Key,
+        checksum: dto.checksum,
+        sizeBytes: BigInt(dto.sizeBytes),
+        uploadedAt: new Date(),
+      },
+      update: {
+        b2Key: dto.b2Key,
+        checksum: dto.checksum,
+        sizeBytes: BigInt(dto.sizeBytes),
+        uploadedAt: new Date(),
+      },
+    });
+
+    const count = await this.prisma.recordingSegment.count({ where: { recordingId } });
+    await this.prisma.recording.update({
+      where: { id: recordingId },
+      data: { segmentCount: count },
+    });
+
+    return {
+      id: segment.id,
+      sequence: segment.sequence,
+      b2Key: segment.b2Key,
+      sizeBytes: segment.sizeBytes.toString(),
+      segmentCount: count,
+    };
+  }
+}
 }
