@@ -11,6 +11,7 @@ void main() {
 
 class LossDefenderApp extends StatelessWidget {
   const LossDefenderApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -87,8 +88,7 @@ class _AuthRootState extends State<AuthRoot> {
     }
     if (_bootError != null || _auth == null) {
       return Scaffold(
-        body: Center(
-            child: Text(_bootError ?? "No auth", textAlign: TextAlign.center)),
+        body: Center(child: Text(_bootError ?? "No auth", textAlign: TextAlign.center)),
       );
     }
     if (_auth!.isSignedIn) return HomePage(auth: _auth!);
@@ -100,6 +100,7 @@ class SignInPage extends StatefulWidget {
   final Auth auth;
   final VoidCallback onSignedIn;
   const SignInPage({super.key, required this.auth, required this.onSignedIn});
+
   @override
   State<SignInPage> createState() => _SignInPageState();
 }
@@ -202,8 +203,7 @@ class _SignInPageState extends State<SignInPage> {
               children: [
                 const Text("LOSS DEFENDER",
                     textAlign: TextAlign.center,
-                    style:
-                        TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 24),
                 if (!_needCode) ...[
                   TextField(
@@ -236,8 +236,9 @@ class _SignInPageState extends State<SignInPage> {
                   onPressed: _busy
                       ? null
                       : (_needCode ? _submitCode : _submitPassword),
-                  child: Text(
-                      _busy ? "…" : (_needCode ? "Verify code" : "Sign in")),
+                  child: Text(_busy
+                      ? "…"
+                      : (_needCode ? "Verify code" : "Sign in")),
                 ),
               ],
             ),
@@ -251,6 +252,7 @@ class _SignInPageState extends State<SignInPage> {
 class HomePage extends StatefulWidget {
   final Auth auth;
   const HomePage({super.key, required this.auth});
+
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -259,9 +261,8 @@ class _HomePageState extends State<HomePage> {
   final _dio = Dio(BaseOptions(
     baseUrl: Env.apiBaseUrl,
     connectTimeout: const Duration(seconds: 20),
-    // 400 body dekhne ke liye default validateStatus change nahi — try/catch use
   ));
-  String _log = "Ready — Sync first";
+  String _log = "Ready";
   bool _busy = false;
   Map<String, dynamic>? _user;
   String? _lastOrderId;
@@ -289,11 +290,7 @@ class _HomePageState extends State<HomePage> {
         return;
       }
       _dio.options.headers["Authorization"] = "Bearer $jwt";
-      _dio.options.headers["Content-Type"] = "application/json";
       await fn();
-    } on DioException catch (e) {
-      setState(() => _log =
-          "Dio ${e.response?.statusCode}\n${e.response?.data}\n${e.message}");
     } catch (e) {
       setState(() => _log = "Error: $e");
     } finally {
@@ -335,74 +332,55 @@ class _HomePageState extends State<HomePage> {
   Future<void> _orders() async {
     await _withAuth(() async {
       final r = await _dio.get("/orders");
-      final body = Map<String, dynamic>.from(r.data as Map);
-      final data = body["data"];
-      if (data is List && data.isNotEmpty) {
-        final first = data.first;
-        if (first is Map && first["id"] != null) {
-          _lastOrderId = first["id"].toString();
-        }
-      }
-      setState(() => _log = "ORDERS OK picked=$_lastOrderId\n$body");
+      setState(() => _log = "ORDERS OK\n${r.data}");
     });
   }
 
   Future<void> _createOrder() async {
     await _withAuth(() async {
-      final wid = _user?["warehouseId"]?.toString();
-      final payload = <String, dynamic>{
+      final wid = _user?["warehouseId"];
+      final r = await _dio.post("/orders", data: {
+        "marketplaceOrderId": "TEST-${DateTime.now().millisecondsSinceEpoch}",
         "marketplace": "manual",
-        "marketplaceOrderId":
-            "TEST-${DateTime.now().millisecondsSinceEpoch}",
         "items": [
-          <String, dynamic>{
-            "sku": "SKU-001",
-            "qty": 2,
-            "name": "Test Item",
-          },
+          {"sku": "SKU-001", "name": "Test Item", "qty": 2, "scannedQty": 0}
         ],
-      };
-      if (wid != null && wid.isNotEmpty) {
-        payload["warehouseId"] = wid;
-      }
-      final r = await _dio.post("/orders", data: payload);
+      });
       final body = Map<String, dynamic>.from(r.data as Map);
       final data = body["data"];
       if (data is Map && data["id"] != null) {
         _lastOrderId = data["id"].toString();
       }
-      if (_lastOrderId != null) {
-        await _dio.patch("/orders/$_lastOrderId/status", data: {"status": "queued"});
-      }
-      setState(() =>
-          _log = "CREATE + QUEUE OK id=$_lastOrderId\npayload=$payload\n$body");
+      setState(() => _log = "CREATE ORDER OK\n$body");
     });
   }
 
   Future<void> _scannerValidate() async {
     await _withAuth(() async {
       if (_lastOrderId == null) {
-        setState(() => _log = "Orders or Create order first");
+        setState(() => _log = "Create an order first (or set order id)");
         return;
       }
       final r = await _dio.post("/scanner/validate", data: {
         "orderId": _lastOrderId,
-        "barcode": "SKU-001",
+        "sku": "SKU-001",
+        "qty": 1,
       });
-      setState(() => _log = "SCAN OK\n${r.data}");
+      setState(() => _log = "SCANNER OK\n${r.data}");
     });
   }
 
   Future<void> _startRecording() async {
     await _withAuth(() async {
+      final wid = _user?["warehouseId"];
       final oid = _lastOrderId;
-      if (oid == null) {
-        setState(() => _log = "Need orderId");
+      if (oid == null || wid == null) {
+        setState(() => _log = "Need orderId + warehouseId — create order first");
         return;
       }
       final r = await _dio.post("/recordings/start", data: {
         "orderId": oid,
-      });
+        });
       setState(() => _log = "RECORDING START OK\n${r.data}");
     });
   }
@@ -425,8 +403,7 @@ class _HomePageState extends State<HomePage> {
         actions: [
           TextButton(
             onPressed: _signOut,
-            child:
-                const Text("Sign out", style: TextStyle(color: Colors.white)),
+            child: const Text("Sign out", style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -440,8 +417,7 @@ class _HomePageState extends State<HomePage> {
                 child: ListTile(
                   leading: const Icon(Icons.person),
                   title: Text("${_user!["email"]} · ${_user!["role"]}"),
-                  subtitle: Text(
-                      "Co: ${_user!["companyId"]}\nWH: ${_user!["warehouseId"]}"),
+                  subtitle: Text("Co: ${_user!["companyId"]}\nWH: ${_user!["warehouseId"]}"),
                 ),
               ),
             const SizedBox(height: 8),
@@ -449,27 +425,16 @@ class _HomePageState extends State<HomePage> {
               spacing: 6,
               runSpacing: 6,
               children: [
-                FilledButton(
-                    onPressed: _busy ? null : _health,
-                    child: const Text("Health")),
-                FilledButton(
-                    onPressed: _busy ? null : _sync,
-                    child: const Text("Sync")),
-                FilledButton(
-                    onPressed: _busy ? null : _company,
-                    child: const Text("Company")),
-                FilledButton(
-                    onPressed: _busy ? null : _orders,
-                    child: const Text("Orders")),
+                FilledButton(onPressed: _busy ? null : _health, child: const Text("Health")),
+                FilledButton(onPressed: _busy ? null : _sync, child: const Text("Sync")),
+                FilledButton(onPressed: _busy ? null : _company, child: const Text("Company")),
+                FilledButton(onPressed: _busy ? null : _orders, child: const Text("Orders")),
                 FilledButton.tonal(
-                    onPressed: _busy ? null : _createOrder,
-                    child: const Text("Create order")),
+                    onPressed: _busy ? null : _createOrder, child: const Text("Create order")),
                 FilledButton.tonal(
-                    onPressed: _busy ? null : _scannerValidate,
-                    child: const Text("Scan SKU-001")),
+                    onPressed: _busy ? null : _scannerValidate, child: const Text("Scan SKU-001")),
                 FilledButton.tonal(
-                    onPressed: _busy ? null : _startRecording,
-                    child: const Text("Start recording")),
+                    onPressed: _busy ? null : _startRecording, child: const Text("Start recording")),
               ],
             ),
             const SizedBox(height: 8),

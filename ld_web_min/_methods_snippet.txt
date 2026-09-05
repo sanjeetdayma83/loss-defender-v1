@@ -1,0 +1,82 @@
+﻿// === PASTE: replace existing _createOrder / _orders / _scannerValidate / _startRecording ===
+
+  Future<void> _createOrder() async {
+    await _withAuth(() async {
+      final wid = _user?["warehouseId"];
+      final payload = <String, dynamic>{
+        "marketplace": "manual",
+        "marketplaceOrderId": "TEST-${DateTime.now().millisecondsSinceEpoch}",
+        if (wid != null) "warehouseId": wid,
+        "items": [
+          {"sku": "SKU-001", "qty": 2, "name": "Test Item"},
+        ],
+      };
+      try {
+        final r = await _dio.post("/orders", data: payload);
+        final body = Map<String, dynamic>.from(r.data as Map);
+        final data = body["data"];
+        if (data is Map && data["id"] != null) {
+          _lastOrderId = data["id"].toString();
+        }
+        setState(() => _log = "CREATE ORDER OK id=$_lastOrderId\n$body");
+      } on DioException catch (e) {
+        setState(() => _log =
+            "CREATE FAIL ${e.response?.statusCode}\npayload=$payload\nresponse=${e.response?.data}");
+      }
+    });
+  }
+
+  Future<void> _orders() async {
+    await _withAuth(() async {
+      final r = await _dio.get("/orders");
+      final body = Map<String, dynamic>.from(r.data as Map);
+      final data = body["data"];
+      if (data is List && data.isNotEmpty) {
+        final first = data.first;
+        if (first is Map && first["id"] != null) {
+          _lastOrderId = first["id"].toString();
+        }
+      }
+      setState(() => _log = "ORDERS OK picked=$_lastOrderId\n$body");
+    });
+  }
+
+  Future<void> _scannerValidate() async {
+    await _withAuth(() async {
+      final oid = _lastOrderId;
+      if (oid == null) {
+        setState(() => _log = "No orderId — Create order or Orders first");
+        return;
+      }
+      try {
+        final r = await _dio.post("/scanner/validate", data: {
+          "orderId": oid,
+          "barcode": "SKU-001",
+        });
+        setState(() => _log = "SCAN OK\n${r.data}");
+      } on DioException catch (e) {
+        setState(() => _log =
+            "SCAN FAIL ${e.response?.statusCode}\n${e.response?.data}");
+      }
+    });
+  }
+
+  Future<void> _startRecording() async {
+    await _withAuth(() async {
+      final oid = _lastOrderId;
+      if (oid == null) {
+        setState(() => _log = "No orderId — Create order or Orders first");
+        return;
+      }
+      // Backend StartRecordingDto: orderId + optional stationId ONLY
+      try {
+        final r = await _dio.post("/recordings/start", data: {
+          "orderId": oid,
+        });
+        setState(() => _log = "RECORDING START OK\n${r.data}");
+      } on DioException catch (e) {
+        setState(() => _log =
+            "RECORDING FAIL ${e.response?.statusCode}\n${e.response?.data}");
+      }
+    });
+  }

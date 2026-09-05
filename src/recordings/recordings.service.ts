@@ -165,4 +165,3 @@ export class RecordingsService {
     if (!row) throw new NotFoundException("Recording not found");
     return row;
   }
-}
