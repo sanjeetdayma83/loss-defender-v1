@@ -8,6 +8,8 @@ import { StorageModule } from "./storage/storage.module";
 import { ClerkAuthGuard } from "./common/guards/clerk-auth.guard";
 import { TenantGuard } from "./common/guards/tenant.guard";
 import { RolesGuard } from "./common/guards/roles.guard";
+import { PermissionsGuard } from "./common/guards/permissions.guard";
+import { PlanLimitGuard } from "./common/guards/plan-limit.guard";
 import { AuthModule } from "./auth/auth.module";
 import { CompaniesModule } from "./companies/companies.module";
 import { UsersModule } from "./users/users.module";
@@ -23,6 +25,7 @@ import { MarketplaceModule } from "./marketplace/marketplace.module";
 import { AuditModule } from "./audit/audit.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { BillingModule } from "./billing/billing.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 import { HealthController } from "./health.controller";
 
 @Module({
@@ -46,6 +49,7 @@ import { HealthController } from "./health.controller";
     AuditModule,
     AnalyticsModule,
     BillingModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
   providers: [
@@ -53,6 +57,8 @@ import { HealthController } from "./health.controller";
     { provide: APP_GUARD, useClass: ClerkAuthGuard },
     { provide: APP_GUARD, useClass: TenantGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
+    { provide: APP_GUARD, useClass: PlanLimitGuard },
   ],
 })
 export class AppModule {}

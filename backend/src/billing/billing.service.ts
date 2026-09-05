@@ -30,6 +30,13 @@ export class BillingService {
     private readonly config: ConfigService,
   ) {}
 
+  getPlans() {
+    return Object.keys(PLAN_QUOTAS).map((plan) => ({
+      plan,
+      ...publicQuotas(plan),
+    }));
+  }
+
   async getSubscription(user: AuthUser) {
     const sub = await this.prisma.billingSubscription.findUnique({
       where: { companyId: user.companyId },
@@ -48,48 +55,48 @@ export class BillingService {
     };
   }
 
+  /**
+   * Creates/updates a *pending* subscription only.
+   * Company.plan is NEVER activated from the client — only via Razorpay webhook.
+   */
   async subscribe(
     user: AuthUser,
-    dto: { plan: "starter" | "professional" | "enterprise"; razorpaySubId: string },
+    dto: { plan: "starter" | "professional" | "enterprise"; razorpaySubId?: string },
   ) {
     if (!PLAN_QUOTAS[dto.plan]) throw new BadRequestException("Invalid plan");
     const now = new Date();
     const periodEnd = new Date(now);
     periodEnd.setMonth(periodEnd.getMonth() + 1);
+    const razorpaySubId = dto.razorpaySubId?.trim() || `pending_${user.companyId}_${Date.now()}`;
+
     const sub = await this.prisma.billingSubscription.upsert({
       where: { companyId: user.companyId },
       create: {
         companyId: user.companyId,
-        razorpaySubId: dto.razorpaySubId,
+        razorpaySubId,
         plan: dto.plan as any,
-        status: "active",
+        status: "pending",
         currentPeriodStart: now,
         currentPeriodEnd: periodEnd,
       },
       update: {
-        razorpaySubId: dto.razorpaySubId,
+        razorpaySubId,
         plan: dto.plan as any,
-        status: "active",
+        status: "pending",
         currentPeriodStart: now,
         currentPeriodEnd: periodEnd,
       },
     });
-    await this.prisma.company.update({
-      where: { id: user.companyId },
-      data: {
-        plan: dto.plan as any,
-        storageQuota: PLAN_QUOTAS[dto.plan].storageBytes,
-      },
-    });
-    return sub;
-  }
-
-  getPlans() {
-    return Object.keys(PLAN_QUOTAS).map((id) => ({ id, ...publicQuotas(id) }));
+    // Do NOT update company.plan here
+    return {
+      subscription: sub,
+      message: "Subscription pending payment confirmation via Razorpay webhook",
+    };
   }
 
   verifyRazorpaySignature(rawBody: Buffer, signature: string | undefined): boolean {
-    const secret = this.config.get<string>("razorpay.keySecret");
+    const secret = this.config.get<string>("razorpay.keySecret")
+      || this.config.get<string>("RAZORPAY_KEY_SECRET");
     if (!secret || !signature) return false;
     const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
     try {
@@ -102,11 +109,65 @@ export class BillingService {
     }
   }
 
+  /** Webhook-only plan activation */
   async handleRazorpayWebhook(rawBody: Buffer, signature: string | undefined) {
     if (!this.verifyRazorpaySignature(rawBody, signature)) {
       throw new UnauthorizedException("Invalid Razorpay signature");
     }
     const payload = JSON.parse(rawBody.toString("utf8"));
-    return { received: true, event: payload?.event };
+    const event = payload?.event as string | undefined;
+
+    // Activate on subscription.activated / charged
+    if (
+      event === "subscription.activated" ||
+      event === "subscription.charged" ||
+      event === "subscription.completed"
+    ) {
+      const rzSubId = payload?.payload?.subscription?.entity?.id
+        || payload?.payload?.subscription?.id
+        || payload?.subscription?.id;
+      const notesPlan = payload?.payload?.subscription?.entity?.notes?.plan
+        || payload?.payload?.payment?.entity?.notes?.plan;
+
+      if (rzSubId) {
+        const sub = await this.prisma.billingSubscription.findFirst({
+          where: { razorpaySubId: String(rzSubId) },
+        });
+        if (sub) {
+          const plan = (notesPlan || sub.plan) as any;
+          const quota = PLAN_QUOTAS[plan] || PLAN_QUOTAS.free;
+          await this.prisma.$transaction([
+            this.prisma.billingSubscription.update({
+              where: { id: sub.id },
+              data: { status: "active", plan },
+            }),
+            this.prisma.company.update({
+              where: { id: sub.companyId },
+              data: {
+                plan,
+                storageQuota: quota.storageBytes,
+              },
+            }),
+          ]);
+        }
+      }
+    }
+
+    if (event === "subscription.cancelled" || event === "subscription.halted") {
+      const rzSubId = payload?.payload?.subscription?.entity?.id;
+      if (rzSubId) {
+        const sub = await this.prisma.billingSubscription.findFirst({
+          where: { razorpaySubId: String(rzSubId) },
+        });
+        if (sub) {
+          await this.prisma.billingSubscription.update({
+            where: { id: sub.id },
+            data: { status: "cancelled" },
+          });
+        }
+      }
+    }
+
+    return { received: true, event };
   }
 }
